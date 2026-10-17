@@ -15,9 +15,14 @@ provider:
     STAGE_FUNCTION_NAME: ${self:service}-${sls:stage}-stage
     WORKFLOW_ARN: !Ref LayeredDesignWorkflow
     OPENAI_API_KEY: ${file(./config.${sls:stage}.json):openai_api_key}
-    CLOUDINARY_CLOUD_NAME: ${file(./config.${sls:stage}.json):cloudinary_cloud_name}
-    CLOUDINARY_API_KEY: ${file(./config.${sls:stage}.json):cloudinary_api_key}
-    CLOUDINARY_API_SECRET: ${file(./config.${sls:stage}.json):cloudinary_api_secret}
+    # Only the ARN is an environment variable; the credentials themselves are
+    # read from Secrets Manager at cold start, so they never appear in the
+    # console, in GetFunctionConfiguration or in CloudFormation state, and a
+    # rotated key takes effect without a redeploy.
+    CLOUDINARY_SECRET_ARN: ${file(./config.${sls:stage}.json):cloudinary_secret_arn}
+    # Each stage uploads to its own folder so dev jobs never mix with
+    # production assets in the shared Cloudinary account.
+    CLOUDINARY_FOLDER: layered-design-${sls:stage}
   ecr:
     images:
       layered_design_image:
@@ -154,6 +159,12 @@ resources:
                     - dynamodb:GetItem
                     - dynamodb:UpdateItem
                   Resource: !GetAtt JobsTable.Arn
+                # Scoped to the one secret this service needs, not to
+                # secretsmanager:* - a stage Lambda running model-authored
+                # content should not be able to read every secret in the account.
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: ${file(./config.${sls:stage}.json):cloudinary_secret_arn}
 
     WorkflowRole:
       Type: AWS::IAM::Role

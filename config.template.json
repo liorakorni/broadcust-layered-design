@@ -1,6 +1,4 @@
 {
-  "openai_api_key": "YOUR_OPENAI_API_KEY",
-  "cloudinary_cloud_name": "",
-  "cloudinary_api_key": "",
-  "cloudinary_api_secret": ""
+  "openai_api_key": "sk-...",
+  "cloudinary_secret_arn": "arn:aws:secretsmanager:us-east-1:816069163425:secret:Cloudinery-XXXXXX"
 }

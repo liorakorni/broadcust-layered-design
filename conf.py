@@ -31,6 +31,13 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 # --- Providers ---------------------------------------------------------------
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+# Cloudinary credentials come from Secrets Manager in a deployed environment, so
+# they never appear in Lambda environment variables, CloudFormation state or a
+# local file, and a rotated key takes effect on the next cold start rather than
+# needing a redeploy. The direct variables below remain as an override for local
+# runs and tests, where there is no AWS role to assume.
+CLOUDINARY_SECRET_ARN = os.environ.get("CLOUDINARY_SECRET_ARN", "")
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "")
 CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY", "")
 CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET", "")
@@ -91,6 +98,7 @@ class ConfigurationError(RuntimeError):
 #: so a misconfigured deployment fails immediately instead of mid-pipeline.
 API_REQUIRED = ("JOBS_TABLE", "ARTIFACT_BUCKET", "WORKFLOW_ARN")
 STAGE_REQUIRED = ("JOBS_TABLE", "ARTIFACT_BUCKET", "OPENAI_API_KEY")
+#: Only used when CLOUDINARY_SECRET_ARN is absent; see validate_media below.
 MEDIA_REQUIRED = (
     "CLOUDINARY_CLOUD_NAME",
     "CLOUDINARY_API_KEY",
@@ -109,3 +117,14 @@ def validate(required_names):
         raise ConfigurationError(
             "Missing required configuration: " + ", ".join(sorted(missing))
         )
+
+
+def validate_media():
+    """Media credentials may arrive either way, so check for one or the other.
+
+    A deployment supplies CLOUDINARY_SECRET_ARN; a local run supplies the three
+    values directly. Requiring both would break one of the two environments.
+    """
+    if CLOUDINARY_SECRET_ARN:
+        return
+    validate(MEDIA_REQUIRED)

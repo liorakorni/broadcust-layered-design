@@ -63,14 +63,16 @@ def run(job_id, attempt, asset_id=None, *, check_renderer=True):
 
 def _check_configuration():
     problems = []
-    for names, label in (
-        (conf.STAGE_REQUIRED, "pipeline"),
-        (conf.MEDIA_REQUIRED, "stable media publishing"),
-    ):
-        try:
-            conf.validate(names)
-        except conf.ConfigurationError as exc:
-            problems.append(f"{label}: {exc}")
+    try:
+        conf.validate(conf.STAGE_REQUIRED)
+    except conf.ConfigurationError as exc:
+        problems.append(f"pipeline: {exc}")
+    try:
+        # Credentials may come from Secrets Manager or the environment, so this
+        # accepts either rather than demanding both.
+        conf.validate_media()
+    except conf.ConfigurationError as exc:
+        problems.append(f"stable media publishing: {exc}")
     return problems
 
 

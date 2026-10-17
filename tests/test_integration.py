@@ -129,10 +129,20 @@ def test_configured_models_are_all_reachable():
 
 
 @pytest.mark.skipif(
-    not os.environ.get("CLOUDINARY_API_KEY"),
+    # conftest sets dummy CLOUDINARY_* values for the unit tests, so checking
+    # those would never skip. Real credentials arrive either as a Secrets
+    # Manager ARN or as a cloud name that is not the test placeholder.
+    not os.environ.get("CLOUDINARY_SECRET_ARN")
+    and os.environ.get("CLOUDINARY_CLOUD_NAME", "") in ("", "test-cloud"),
     reason="stable media credentials are not configured",
 )
 def test_stable_media_publishing_is_reachable():
+    """Exercises whichever credential source is configured.
+
+    With CLOUDINARY_SECRET_ARN set this also proves the AWS role can read the
+    secret, which is the part that only fails once deployed.
+    """
     from lib import media
 
+    media.reset()
     assert media.check_available()
