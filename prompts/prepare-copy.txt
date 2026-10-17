@@ -14,6 +14,10 @@ Assign each item a stable contentKey in dot notation, for example
 title.primary, subtitle.primary, service.1, cta.primary, contact.phone,
 contact.email, contact.website, business.name.
 
+Each dot-separated segment must use only lowercase letters, digits and
+underscores, and must start with a letter. Write service.personal_support, not
+service.personalSupport and not service.personal-support.
+
 BRIEF:
 {post}
 

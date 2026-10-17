@@ -57,7 +57,13 @@ COPY_SCHEMA = {
     },
 }
 
-CONTENT_KEY = re.compile(r"^[a-z][a-z0-9]*(\.[a-z0-9]+)*$")
+#: Underscores are allowed inside a segment because multi-word keys are the
+#: natural result of asking for a descriptive name - service.personal_support
+#: rather than service.2 - and the key is an internal identifier tying copy to a
+#: scene layer, so the separator carries no meaning of its own. Strict
+#: structured output has no pattern support, so this cannot be enforced at
+#: generation time; the prompt states the rule instead.
+CONTENT_KEY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$")
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 

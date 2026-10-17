@@ -183,3 +183,35 @@ def test_too_many_items_rejected():
     ]
     with pytest.raises(CopyInvalid, match="limit is 40"):
         ok(items)
+
+
+def test_a_multi_word_content_key_is_accepted():
+    """The model names keys descriptively when a role has no obvious number.
+
+    A live run produced service.personal_support and the job died at
+    PREPARE_COPY, because the pattern allowed no separator inside a segment and
+    nothing had ever told the model that.
+    """
+    from lib.stages.prepare_copy import CONTENT_KEY
+
+    assert CONTENT_KEY.match("service.personal_support")
+    assert CONTENT_KEY.match("title.primary")
+    assert CONTENT_KEY.match("service.1")
+    assert CONTENT_KEY.match("business.name")
+
+
+def test_content_keys_that_are_not_dot_notation_are_still_rejected():
+    from lib.stages.prepare_copy import CONTENT_KEY
+
+    for bad in ("Service.Primary", "service-primary", "_service.x", "1service.x",
+                "service..x", "service.", ".service"):
+        assert not CONTENT_KEY.match(bad), bad
+
+
+def test_the_prompt_states_the_content_key_rule():
+    """Enforcing a format the generator was never given is how this broke."""
+    from lib import prompts
+
+    text = " ".join(prompts.load("prepare-copy").split())
+    assert "lowercase letters, digits and underscores" in text
+    assert "service.personal_support" in text
