@@ -114,6 +114,82 @@ def render(html, canvas, scene):
     return {"native": native, "feed": feed, "checks": checks}
 
 
+#: How far a layer's font may be reduced to make it fit, as a fraction of the
+#: size the scene asked for. The defect being absorbed is small - the model
+#: estimates box widths from a concept drawn in a different typeface, and is
+#: typically out by under ten percent - but a box is only one line tall, so a
+#: slight overrun wraps and doubles the height. A modest reduction therefore
+#: fixes most of it. Text that still does not fit at this floor is left alone
+#: and reported: shrinking further would trade an overflow REVIEW can see for
+#: illegibility at the 360px feed size, which it cannot.
+_MIN_FIT_RATIO = 0.75
+
+
+def fit_text_layers(html, canvas):
+    """Shrink text that overflows its box, and report what was changed.
+
+    Only a browser holding the real font files can answer how wide a string
+    actually sets, which is why this measures rather than estimates. Each layer
+    is searched for the largest size that fits, so a layer that needs one pixel
+    loses one pixel.
+    """
+    document = _document(html, canvas)
+
+    with _playwright()() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        try:
+            page = browser.new_page(
+                viewport={"width": canvas["width"], "height": canvas["height"]},
+                device_scale_factor=1,
+            )
+            page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            # Images are irrelevant to text metrics and would only add a network
+            # wait, but fonts are not: measuring before Heebo resolves would size
+            # every layer against a fallback face.
+            page.set_content(document, wait_until="domcontentloaded")
+            page.evaluate("() => document.fonts.ready")
+            fitted = page.evaluate(_FIT_SCRIPT, {"minRatio": _MIN_FIT_RATIO})
+        except Exception as exc:
+            raise RenderFailed(f"The design could not be measured: {exc}") from exc
+        finally:
+            browser.close()
+
+    return fitted
+
+
+#: Returns one entry per layer it changed, keyed by element id.
+_FIT_SCRIPT = """(options) => {
+    const changed = {};
+
+    for (const el of document.querySelectorAll('.words')) {
+        const inner = el.querySelector('.text');
+        if (!inner || !inner.textContent.trim()) continue;
+
+        const fits = () => el.scrollHeight <= el.clientHeight + 1
+                        && el.scrollWidth <= el.clientWidth + 1;
+        if (fits()) continue;
+
+        const original = Math.round(parseFloat(getComputedStyle(el).fontSize));
+        const floor = Math.max(1, Math.floor(original * options.minRatio));
+
+        // Largest size that fits, rather than the first one found: stepping down
+        // would stop at whatever size happened to clear the box.
+        let low = floor, high = original - 1, best = null;
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            el.style.fontSize = mid + 'px';
+            if (fits()) { best = mid; low = mid + 1; } else { high = mid - 1; }
+        }
+
+        const applied = best === null ? floor : best;
+        el.style.fontSize = applied + 'px';
+        changed[el.id] = {original: original, fitted: applied, fits: best !== null};
+    }
+
+    return changed;
+}"""
+
+
 def _document(html, canvas):
     """Wrap the design fragment in a minimal page.
 

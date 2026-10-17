@@ -83,6 +83,25 @@ def _image_layers(scene, assets, canvas):
     return out
 
 
+def _numbered_text_layers(scene):
+    """Pair each text layer with the number its element id is built from."""
+    return enumerate(
+        sorted(scene["textLayers"], key=lambda item: (item["zIndex"], item["id"])),
+        start=1001,
+    )
+
+
+def element_ids(scene):
+    """Map each scene text layer id to the element id it is emitted as.
+
+    The emitted HTML carries no reference back to the scene - its shape is fixed
+    by docs/CONTRACTS.md and adding an attribute would break the contract - so
+    anything that measures the rendered document and wants to act on the scene
+    has to recover the correspondence through the same ordering used to emit it.
+    """
+    return {layer["id"]: f"text-{index}" for index, layer in _numbered_text_layers(scene)}
+
+
 def _text_layers(scene):
     """Emit one `.words` block per text layer.
 
@@ -90,10 +109,7 @@ def _text_layers(scene):
     copy only, which is what makes the text editable without touching layout.
     """
     out = []
-    for index, layer in enumerate(
-        sorted(scene["textLayers"], key=lambda item: (item["zIndex"], item["id"])),
-        start=1001,
-    ):
+    for index, layer in _numbered_text_layers(scene):
         role = layer["role"]
         if role not in ALLOWED_ROLES:
             raise AssemblyFailed(

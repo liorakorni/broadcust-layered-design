@@ -149,7 +149,9 @@ def finalize(job_id, attempt, asset_id=None):
             "deliverable may have been modified."
         )
 
-    scene = artifacts.get_json(job_id, produced[Stage.EXTRACT_SCENE]["scene"])
+    # ASSEMBLE's scene describes the document being delivered; EXTRACT_SCENE's
+    # describes what was asked for before text fitting adjusted it.
+    scene = artifacts.get_json(job_id, produced[Stage.ASSEMBLE]["scene"])
 
     # The preview is the native render published to a durable URL. It joins the
     # manifest so its hash is covered too.

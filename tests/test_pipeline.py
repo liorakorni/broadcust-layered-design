@@ -255,6 +255,10 @@ def pipeline(monkeypatch):
 
     monkeypatch.setattr(renderer, "render", fake_render)
 
+    # Text fitting needs a real browser to measure in. The default is "nothing
+    # overflowed"; tests that care about fitting override it.
+    monkeypatch.setattr(renderer, "fit_text_layers", lambda html, canvas: {})
+
     job_id = "job-italy"
     request_key = artifacts.artifact_key(job_id, Stage.ACCEPT_REQUEST, 1, "request.json")
     artifacts.put_json(request_key, REQUEST)

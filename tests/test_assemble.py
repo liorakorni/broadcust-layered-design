@@ -269,3 +269,81 @@ def test_assembly_and_validation_share_one_role_allowlist():
     from lib import assemble_html, schemas
 
     assert assemble_html.ALLOWED_ROLES is schemas.ALLOWED_ROLES
+
+
+# --- text fitting ----------------------------------------------------------
+
+
+def test_element_ids_follow_the_order_the_html_is_emitted_in():
+    """The fit measures the document and has to act back on the scene.
+
+    Nothing in the emitted HTML points at the scene - the structure is frozen by
+    docs/CONTRACTS.md - so the correspondence is reconstructed from the ordering.
+    If these two ever disagree, the fit silently resizes the wrong layers.
+    """
+    import re
+
+    from lib import assemble_html
+
+    built = scene(
+        textLayers=[
+            text_layer(id="b", zIndex=5),
+            text_layer(id="a", zIndex=2),
+            text_layer(id="c", zIndex=2),
+        ]
+    )
+    emitted = re.findall(r'id="(text-\d+)"', assemble(built, ASSETS, CANVAS))
+    mapping = assemble_html.element_ids(built)
+
+    # zIndex first, then id: a and c share zIndex 2, b sorts last on zIndex 5.
+    assert [mapping["a"], mapping["c"], mapping["b"]] == emitted
+
+
+def test_overflowing_text_is_shrunk_and_the_scene_records_it(monkeypatch):
+    from lib import assemble_html, render as renderer
+    from lib.stages import assemble as assemble_stage
+
+    built = scene(
+        textLayers=[
+            text_layer(id="headline", fontSize=40),
+            text_layer(id="caption", fontSize=20, zIndex=12),
+        ]
+    )
+    ids = assemble_html.element_ids(built)
+    monkeypatch.setattr(
+        renderer,
+        "fit_text_layers",
+        lambda html, canvas: {
+            ids["headline"]: {"original": 40, "fitted": 34, "fits": True}
+        },
+    )
+
+    fitted, changes = assemble_stage._fit_text(built, "<div></div>", CANVAS)
+    sized = {layer["id"]: layer["fontSize"] for layer in fitted["textLayers"]}
+
+    assert sized["headline"] == 34
+    assert sized["caption"] == 20, "layers that fit keep the size asked for"
+    assert changes["headline"]["fitted"] == 34
+    # The scene handed in is left intact, so the original geometry stays readable.
+    assert built["textLayers"][0]["fontSize"] == 40
+
+
+def test_a_design_that_already_fits_is_left_alone(monkeypatch):
+    from lib import render as renderer
+    from lib.stages import assemble as assemble_stage
+
+    built = scene()
+    monkeypatch.setattr(renderer, "fit_text_layers", lambda html, canvas: {})
+
+    fitted, changes = assemble_stage._fit_text(built, "<div></div>", CANVAS)
+    assert changes == {}
+    assert fitted is built
+
+
+def test_the_fit_has_a_floor_so_text_stays_legible():
+    """Shrinking without a bound trades an overflow REVIEW can see for
+    illegibility at the 360px feed size, which it cannot."""
+    from lib import render as renderer
+
+    assert 0.5 < renderer._MIN_FIT_RATIO < 1.0
+    assert "minRatio" in renderer._FIT_SCRIPT
