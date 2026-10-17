@@ -71,6 +71,15 @@ def handler(event, context):
 
     # The correction branch is workflow plumbing rather than a pipeline stage:
     # it consumes a bounded round and advances the attempt counter.
+    # Also workflow plumbing rather than a pipeline stage: a bounded targeted
+    # edit of the overlay, after which the workflow re-enters VALIDATE_ASSETS.
+    if event.get("operation") == "REPAIR_OVERLAY":
+        from lib.stages import separation
+
+        artifacts = separation.repair_overlay(job_id=job_id, attempt=attempt)
+        _log(job_id, Stage.DECORATION_OVERLAY, attempt, started)
+        return {"ok": True, "stage": Stage.DECORATION_OVERLAY, "artifacts": artifacts}
+
     if event.get("operation") == "CORRECT":
         from lib.stages import review
 
@@ -139,7 +148,10 @@ def _record_failure(job_id, failure):
             message = parsed.get("errorMessage") or ""
         except (ValueError, TypeError):
             message = cause if isinstance(cause, str) else ""
-        error["code"] = _CODE_BY_EXCEPTION.get(name, Code.INTERNAL)
+        raised = _error_classes().get(name)
+        if raised is not None:
+            error["code"] = raised.code
+            error["retryable"] = raised.retryable
         if message:
             error["message"] = message
         stage = _stage_from_message(message)
@@ -151,26 +163,32 @@ def _record_failure(job_id, failure):
     return {"ok": True, "stage": Stage.FINALIZE, "artifacts": {"error": error["code"]}}
 
 
-#: Lambda surfaces a raised exception to Step Functions by class name.
-_CODE_BY_EXCEPTION = {
-    "NotImplementedStage": Code.NOT_IMPLEMENTED,
-    "TransparencyUnsupported": Code.TRANSPARENCY_UNSUPPORTED,
-    "InvalidTransparency": Code.INVALID_TRANSPARENCY,
-    "InvalidScene": Code.INVALID_SCENE,
-    "AssetInvalid": Code.ASSET_INVALID,
-    "RenderFailed": Code.RENDER_FAILED,
-    "FontMissing": Code.FONT_MISSING,
-    "ReviewBlocked": Code.REVIEW_BLOCKED,
-    "CorrectionExhausted": Code.CORRECTION_EXHAUSTED,
-    "MediaDeliveryUnavailable": Code.MEDIA_DELIVERY_UNAVAILABLE,
-    "ProviderOutcomeUnknown": Code.PROVIDER_OUTCOME_UNKNOWN,
-    "ProviderTimeout": Code.PROVIDER_TIMEOUT,
-    "ProviderRateLimited": Code.PROVIDER_RATE_LIMITED,
-    "ProviderError": Code.PROVIDER_ERROR,
-    "InvalidModelJson": Code.INVALID_MODEL_JSON,
-    "ConfigurationInvalid": Code.CONFIGURATION_INVALID,
-    "CapabilityMissing": Code.CAPABILITY_MISSING,
-}
+#: Lambda surfaces a raised exception to Step Functions by class name, and the
+#: name is the only handle left for recovering what the failure actually was.
+_ERROR_CLASSES = None
+
+
+def _error_classes():
+    """Map every raisable error class name to the class itself.
+
+    Both the reported code and whether the failure was retryable come from the
+    class, rather than from a table maintained alongside it. The table this
+    replaces had fallen nine classes behind - AssemblyFailed and CopyInvalid
+    among them - and every one of those was being recorded as a generic internal
+    error that callers could not act on.
+    """
+    global _ERROR_CLASSES
+    if _ERROR_CLASSES is None:
+        from lib import errors
+
+        found = {}
+        pending = [errors.LayeredDesignError]
+        while pending:
+            cls = pending.pop()
+            found[cls.__name__] = cls
+            pending.extend(cls.__subclasses__())
+        _ERROR_CLASSES = found
+    return _ERROR_CLASSES
 
 
 def _stage_from_message(message):

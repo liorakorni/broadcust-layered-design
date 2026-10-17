@@ -99,6 +99,19 @@ def claim_idempotency(owner_scope, request_id, request_hash):
     return existing["jobId"], False
 
 
+def record_overlay_defect(job_id, description):
+    """Store what the inspection wants removed from the decoration layer.
+
+    Kept on the job rather than in S3 because it is transient state for the next
+    repair, not an artifact of the design, and each repair supersedes the last.
+    """
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET overlayDefect = :d, updatedAt = :now",
+        ExpressionAttributeValues={":d": description or "", ":now": _now()},
+    )
+
+
 def job_exists(job_id):
     """True only when `job_id` has a complete job record.
 

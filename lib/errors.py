@@ -261,6 +261,18 @@ class InvalidTransparency(LayeredDesignError):
     code = Code.INVALID_TRANSPARENCY
 
 
+class OverlayRepairNeeded(InvalidTransparency):
+    """The overlay is unusable but a bounded repair is still available.
+
+    A separate class rather than a flag: Step Functions can only branch on the
+    exception class name, so this is what lets the workflow route to a repair
+    instead of failing the job. Once the repairs allowed by SPEC section 4 are
+    spent, plain InvalidTransparency is raised and the job ends.
+    """
+
+    retryable = True
+
+
 class AssetInvalid(LayeredDesignError):
     stage = Stage.VALIDATE_ASSETS
     code = Code.ASSET_INVALID

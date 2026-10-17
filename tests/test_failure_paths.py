@@ -139,7 +139,8 @@ def test_photograph_surviving_in_the_overlay_is_caught_by_vision(pipeline, monke
     def leftovers(prompt, images=(), *, schema_name, **kwargs):
         if schema_name == "overlay_inspection_v1":
             return {"photographicLeftovers": True, "textLeftovers": False,
-                    "artworkPresent": True, "notes": "sky visible"}
+                    "artworkPresent": True, "notes": "sky visible",
+                    "leftoverDescription": "a strip of photographic sky along the top"}
         return real(prompt, images, schema_name=schema_name, **kwargs)
 
     monkeypatch.setattr(vision_provider, "analyze", leftovers)
@@ -400,3 +401,132 @@ def test_failed_job_never_reports_a_result(pipeline):
     job = jobs.get_job_unscoped(pipeline["jobId"])
     assert job["status"] == Status.FAILED
     assert not job.get("resultKey")
+
+
+# --- bounded overlay repair (SPEC section 4) -------------------------------
+
+
+def _repair(job_id, attempt=1):
+    """Invoke the repair the way the workflow's RepairOverlay state does."""
+    import handler_stage
+
+    event = {
+        "jobId": job_id,
+        "stage": Stage.DECORATION_OVERLAY,
+        "attempt": attempt,
+        "assetId": None,
+        "operation": "REPAIR_OVERLAY",
+    }
+    return handler_stage.handler(event, None)["artifacts"]
+
+
+def test_a_rejected_overlay_is_repaired_and_then_passes(pipeline, monkeypatch):
+    """The whole point of the bound: a repair must actually be able to succeed.
+
+    Before this was wired the repair counter was consumed and the error marked
+    retryable, but nothing ever regenerated the overlay, so every job with a
+    leftover died at VALIDATE_ASSETS.
+    """
+    through(pipeline, Stage.DECORATION_OVERLAY)
+    job_id = pipeline["jobId"]
+
+    real = vision_provider.analyze
+    rejections = {"n": 0}
+
+    def inspection(prompt, images=(), *, schema_name, **kwargs):
+        if schema_name == "overlay_inspection_v1":
+            rejections["n"] += 1
+            leftover = rejections["n"] == 1
+            return {
+                "photographicLeftovers": False,
+                "textLeftovers": leftover,
+                "artworkPresent": True,
+                "notes": "",
+                "leftoverDescription": "a logo mark in the top-right corner"
+                if leftover
+                else "",
+            }
+        return real(prompt, images, schema_name=schema_name, **kwargs)
+
+    monkeypatch.setattr(vision_provider, "analyze", inspection)
+
+    with pytest.raises(InvalidTransparency):
+        run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    rejected_key = jobs.get_job_unscoped(job_id)["artifacts"][
+        Stage.DECORATION_OVERLAY
+    ]["decoration"]
+
+    edits = []
+
+    def capture_edit(prompt, data, width, height, **kwargs):
+        edits.append(prompt)
+        return {"bytes": fake_overlay(), "mimeType": "image/png",
+                "requestId": "repair", "model": conf.IMAGE_MODEL}
+
+    monkeypatch.setattr(image_provider, "edit", capture_edit)
+    result = _repair(job_id)
+
+    # The repair is told what to remove, rather than redesigning blind.
+    assert "logo mark in the top-right corner" in edits[0]
+    # The rejected overlay stays readable; artifacts are append-only.
+    assert result["decoration"] != rejected_key
+    assert artifacts.get_bytes(job_id, rejected_key)
+    # Re-validation now reads the repaired bytes.
+    assert jobs.get_job_unscoped(job_id)["artifacts"][Stage.DECORATION_OVERLAY][
+        "decoration"
+    ] == result["decoration"]
+
+    run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+
+def test_a_repairable_overlay_raises_the_class_the_workflow_routes_on(
+    pipeline, monkeypatch
+):
+    """Step Functions can branch on an exception class but not on a field."""
+    from lib.errors import OverlayRepairNeeded
+
+    through(pipeline, Stage.DECORATION_OVERLAY)
+
+    real = vision_provider.analyze
+
+    def leftovers(prompt, images=(), *, schema_name, **kwargs):
+        if schema_name == "overlay_inspection_v1":
+            return {"photographicLeftovers": False, "textLeftovers": True,
+                    "artworkPresent": True, "notes": "",
+                    "leftoverDescription": "a word in the banner"}
+        return real(prompt, images, schema_name=schema_name, **kwargs)
+
+    monkeypatch.setattr(vision_provider, "analyze", leftovers)
+    with pytest.raises(OverlayRepairNeeded):
+        run_stage(pipeline["jobId"], Stage.VALIDATE_ASSETS)
+
+
+def test_an_exhausted_overlay_repair_is_terminal_not_repairable(
+    pipeline, monkeypatch
+):
+    from lib.errors import OverlayRepairNeeded
+
+    through(pipeline, Stage.DECORATION_OVERLAY)
+    job_id = pipeline["jobId"]
+
+    real = vision_provider.analyze
+
+    def leftovers(prompt, images=(), *, schema_name, **kwargs):
+        if schema_name == "overlay_inspection_v1":
+            return {"photographicLeftovers": False, "textLeftovers": True,
+                    "artworkPresent": True, "notes": "",
+                    "leftoverDescription": "a word in the banner"}
+        return real(prompt, images, schema_name=schema_name, **kwargs)
+
+    monkeypatch.setattr(vision_provider, "analyze", leftovers)
+
+    for _ in range(conf.MAX_OVERLAY_REPAIRS):
+        with pytest.raises(OverlayRepairNeeded):
+            run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    with pytest.raises(InvalidTransparency) as exc:
+        run_stage(job_id, Stage.VALIDATE_ASSETS)
+    assert not isinstance(exc.value, OverlayRepairNeeded)
+    assert exc.value.retryable is False
+    assert "without success" in exc.value.message

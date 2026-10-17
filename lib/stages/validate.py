@@ -17,19 +17,28 @@ import io
 
 import conf
 from lib import artifacts, jobs, validate_assets
-from lib.errors import InvalidTransparency, Stage
+from lib.errors import InvalidTransparency, OverlayRepairNeeded, Stage
 from lib.providers import vision
 
 COMPOSITE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["photographicLeftovers", "textLeftovers", "artworkPresent", "notes"],
+    "required": [
+        "photographicLeftovers",
+        "textLeftovers",
+        "artworkPresent",
+        "leftoverDescription",
+        "notes",
+    ],
     "properties": {
         # A photographic scene surviving in the overlay is the failure a
         # histogram cannot see.
         "photographicLeftovers": {"type": "boolean"},
         "textLeftovers": {"type": "boolean"},
         "artworkPresent": {"type": "boolean"},
+        # What and where, so a repair can target the offending elements instead
+        # of regenerating the whole overlay and losing the parts that were right.
+        "leftoverDescription": {"type": "string"},
         "notes": {"type": "string"},
     },
 }
@@ -43,8 +52,13 @@ Judge the OVERLAY artwork only, not the backgrounds.
   overlay - sky, landscape, buildings, foliage, skin, or photographic texture.
   A flat graphic panel is not photographic.
 - textLeftovers: true if any readable word, letter, number or logo remains.
+  Pictogram icons - a bed, car, plane, phone or envelope symbol - are intended
+  decoration and are not text.
 - artworkPresent: true if real decorative artwork is present - panels, ribbons,
   badges, frames or ornaments.
+- leftoverDescription: when anything above is a problem, name each offending
+  element and where it sits, for example "a logo mark of cypress trees and a
+  house in the top-right corner". Empty string when there is nothing to remove.
 
 If the artwork looks identical against all three backgrounds, the transparency is
 genuine. If it sits on a visible rectangle that changes with the background, it is
@@ -69,6 +83,9 @@ def run(job_id, attempt, asset_id=None):
         stats = validate_assets.validate_overlay(overlay, scene, canvas)
         inspect_composites(overlay, canvas, job_id, attempt)
     except InvalidTransparency as exc:
+        # Raises OverlayRepairNeeded when a repair is still available, which the
+        # workflow routes back to a targeted overlay edit. Otherwise the original
+        # terminal error propagates.
         _request_repair_or_fail(job_id, exc)
         raise
 
@@ -113,6 +130,9 @@ def inspect_composites(overlay_bytes, canvas, job_id, attempt):
     if not verdict["artworkPresent"]:
         problems.append("no decorative artwork was found in the decoration layer")
     if problems:
+        # Persisted before raising so the repair can act on what the inspection
+        # actually saw, rather than re-deriving it from the error message.
+        jobs.record_overlay_defect(job_id, verdict["leftoverDescription"])
         raise InvalidTransparency(
             "The decoration layer was not cleanly separated: " + "; ".join(problems)
         )
@@ -137,8 +157,13 @@ def composite_on(overlay_bytes, colour):
 def _request_repair_or_fail(job_id, exc):
     """Consume one of the bounded overlay repairs, if any remain.
 
-    Exceeding the bound rewrites the error so the caller sees that repair was
-    attempted and exhausted, rather than the same transparency message twice.
+    Raises OverlayRepairNeeded when one was available, because that class is how
+    the workflow decides to repair rather than fail - Step Functions can branch
+    on an exception class but not on a field inside it.
+
+    Exceeding the bound returns instead, after rewriting the message so the
+    caller sees that repair was attempted and exhausted rather than the same
+    transparency complaint twice.
     """
     used = jobs.bump_counter(job_id, "overlayRepairs", conf.MAX_OVERLAY_REPAIRS)
     if used is None:
@@ -148,5 +173,4 @@ def _request_repair_or_fail(job_id, exc):
         )
         exc.retryable = False
         return False
-    exc.retryable = True
-    return True
+    raise OverlayRepairNeeded(exc.message) from exc

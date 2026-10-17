@@ -15,18 +15,27 @@
       "ResultPath": "$.preflight",
       "Retry": [
         {
-          "ErrorEquals": ["ProviderError", "ProviderTimeout", "ProviderRateLimited"],
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout",
+            "ProviderRateLimited"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
           "BackoffRate": 2
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "PrepareCopy"
     },
-
     "PrepareCopy": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -39,18 +48,28 @@
       "ResultPath": "$.prepareCopy",
       "Retry": [
         {
-          "ErrorEquals": ["ProviderError", "ProviderTimeout", "ProviderRateLimited", "InvalidModelJson"],
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout",
+            "ProviderRateLimited",
+            "InvalidModelJson"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
           "BackoffRate": 2
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "Concept"
     },
-
     "Concept": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -64,18 +83,25 @@
       "Comment": "Paid image generation. ProviderOutcomeUnknown is deliberately NOT retried - a retry is exactly what would pay twice.",
       "Retry": [
         {
-          "ErrorEquals": ["ProviderRateLimited"],
+          "ErrorEquals": [
+            "ProviderRateLimited"
+          ],
           "IntervalSeconds": 20,
           "MaxAttempts": 2,
           "BackoffRate": 2
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "ExtractScene"
     },
-
     "ExtractScene": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -88,18 +114,28 @@
       "ResultPath": "$.scene",
       "Retry": [
         {
-          "ErrorEquals": ["InvalidModelJson", "ProviderError", "ProviderTimeout", "ProviderRateLimited"],
+          "ErrorEquals": [
+            "InvalidModelJson",
+            "ProviderError",
+            "ProviderTimeout",
+            "ProviderRateLimited"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
           "BackoffRate": 2
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "SeparateLayers"
     },
-
     "SeparateLayers": {
       "Type": "Parallel",
       "Comment": "Both branches edit the SAME immutable concept bytes. They are never chained: the overlay must not be derived from the cleaned photo.",
@@ -119,7 +155,9 @@
               },
               "Retry": [
                 {
-                  "ErrorEquals": ["ProviderRateLimited"],
+                  "ErrorEquals": [
+                    "ProviderRateLimited"
+                  ],
                   "IntervalSeconds": 20,
                   "MaxAttempts": 2,
                   "BackoffRate": 2
@@ -143,7 +181,9 @@
               },
               "Retry": [
                 {
-                  "ErrorEquals": ["ProviderRateLimited"],
+                  "ErrorEquals": [
+                    "ProviderRateLimited"
+                  ],
                   "IntervalSeconds": 20,
                   "MaxAttempts": 2,
                   "BackoffRate": 2
@@ -155,11 +195,16 @@
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "IndependentAssets"
     },
-
     "IndependentAssets": {
       "Type": "Map",
       "Comment": "At most three independent assets, concurrency two (SPEC section 4).",
@@ -180,7 +225,9 @@
             "Resource": "${StageFunctionArn}",
             "Retry": [
               {
-                "ErrorEquals": ["ProviderRateLimited"],
+                "ErrorEquals": [
+                  "ProviderRateLimited"
+                ],
                 "IntervalSeconds": 20,
                 "MaxAttempts": 2,
                 "BackoffRate": 2
@@ -191,11 +238,16 @@
         }
       },
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "ValidateAssets"
     },
-
     "ValidateAssets": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -207,11 +259,46 @@
       },
       "ResultPath": "$.validation",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "OverlayRepairNeeded"
+          ],
+          "ResultPath": "$.repairNeeded",
+          "Next": "RepairOverlay"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "Assemble"
     },
-
+    "RepairOverlay": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Bounded targeted overlay repair (SPEC section 4). The repair count is held on the job, not here, so task retries cannot buy extra rounds.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "DECORATION_OVERLAY",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "REPAIR_OVERLAY"
+      },
+      "ResultPath": "$.overlayRepair",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ValidateAssets"
+    },
     "Assemble": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -223,11 +310,16 @@
       },
       "ResultPath": "$.assemble",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "Render"
     },
-
     "Render": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -239,11 +331,16 @@
       },
       "ResultPath": "$.render",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "Review"
     },
-
     "Review": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -256,18 +353,27 @@
       "ResultPath": "$.review",
       "Retry": [
         {
-          "ErrorEquals": ["InvalidModelJson", "ProviderError", "ProviderTimeout"],
+          "ErrorEquals": [
+            "InvalidModelJson",
+            "ProviderError",
+            "ProviderTimeout"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
           "BackoffRate": 2
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "ReviewPassed"
     },
-
     "ReviewPassed": {
       "Type": "Choice",
       "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it.",
@@ -285,7 +391,6 @@
       ],
       "Default": "RecordFailure"
     },
-
     "Correct": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -299,11 +404,16 @@
       },
       "ResultPath": "$.correction",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "NextAttempt"
     },
-
     "NextAttempt": {
       "Type": "Pass",
       "Comment": "Advances the attempt counter and drops stale per-attempt state. Corrections loop back to ExtractScene so the layout is genuinely re-derived - re-running from ValidateAssets would re-check identical assets and produce the identical render.",
@@ -313,7 +423,6 @@
       },
       "Next": "ExtractScene"
     },
-
     "Finalize": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -325,15 +434,19 @@
       },
       "ResultPath": "$.finalize",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
       ],
       "Next": "Succeeded"
     },
-
     "Succeeded": {
       "Type": "Succeed"
     },
-
     "RecordFailure": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
@@ -348,11 +461,16 @@
       },
       "ResultPath": "$.recorded",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.recordError", "Next": "Failed" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.recordError",
+          "Next": "Failed"
+        }
       ],
       "Next": "Failed"
     },
-
     "Failed": {
       "Type": "Fail",
       "Comment": "The job record already carries the structured error; this just ends the execution."

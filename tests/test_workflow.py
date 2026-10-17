@@ -294,3 +294,67 @@ def test_a_structured_stage_error_keeps_its_stage(monkeypatch):
     assert error["stage"] == "RENDER"
     assert error["code"] == Code.RENDER_FAILED
     assert "headline overflows" in error["message"]
+
+
+def test_a_retryable_failure_is_recorded_as_retryable(monkeypatch):
+    """The flag is computed in the stage but only the class name crosses the hop.
+
+    Recording every failure as non-retryable tells a caller not to try again when
+    the service itself classified the failure as transient.
+    """
+    from lib.errors import ProviderRateLimited
+
+    def boom(**kwargs):
+        raise ProviderRateLimited("The image provider is rate limiting.")
+
+    error = _round_trip_failure(monkeypatch, boom, "CONCEPT")
+    assert error["retryable"] is True
+    assert error["code"] == "PROVIDER_RATE_LIMITED"
+
+
+def test_every_error_class_is_recoverable_by_name(monkeypatch):
+    """A class missing from the lookup is reported as a generic internal error."""
+    from lib import errors
+
+    discovered = handler_stage._error_classes()
+    for name, cls in vars(errors).items():
+        if isinstance(cls, type) and issubclass(cls, errors.LayeredDesignError):
+            assert discovered.get(name) is cls, f"{name} is not recoverable"
+
+
+def test_a_non_retryable_failure_stays_non_retryable(monkeypatch):
+    from lib.errors import InvalidScene
+
+    def boom(**kwargs):
+        raise InvalidScene("The scene is malformed.")
+
+    error = _round_trip_failure(monkeypatch, boom, "EXTRACT_SCENE")
+    assert error["retryable"] is False
+
+
+def test_a_repairable_overlay_routes_to_the_repair_rather_than_failing():
+    """SPEC section 4 requires bounded targeted overlay repairs.
+
+    The counter and the retryable flag existed long before this edge did, so the
+    repair was being accounted for and never performed.
+    """
+    catches = STATES["ValidateAssets"]["Catch"]
+    assert catches[0]["ErrorEquals"] == ["OverlayRepairNeeded"]
+    assert catches[0]["Next"] == "RepairOverlay"
+    # The blanket catch must stay last, or it would swallow the repair route.
+    assert catches[-1]["ErrorEquals"] == ["States.ALL"]
+    assert catches[-1]["Next"] == "RecordFailure"
+
+
+def test_the_repair_returns_to_validation():
+    """A repair nobody re-checks is just a second way to ship a broken overlay."""
+    assert STATES["RepairOverlay"]["Next"] == "ValidateAssets"
+    assert STATES["RepairOverlay"]["Parameters"]["operation"] == "REPAIR_OVERLAY"
+
+
+def test_the_repair_carries_the_current_attempt():
+    assert STATES["RepairOverlay"]["Parameters"]["attempt.$"] == "$.attempt"
+
+
+def test_a_failed_repair_ends_the_job():
+    assert STATES["RepairOverlay"]["Catch"][0]["Next"] == "RecordFailure"

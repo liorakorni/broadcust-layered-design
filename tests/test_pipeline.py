@@ -231,7 +231,7 @@ def pipeline(monkeypatch):
             return json.loads(json.dumps(SCENE))
         if schema_name == "overlay_inspection_v1":
             return {"photographicLeftovers": False, "textLeftovers": False,
-                    "artworkPresent": True, "notes": ""}
+                    "artworkPresent": True, "notes": "", "leftoverDescription": ""}
         if schema_name == "review_v1":
             return {"passed": True, "blockingIssues": [], "suggestions": []}
         raise AssertionError(f"unexpected schema {schema_name}")
