@@ -236,3 +236,53 @@ def test_correction_rounds_are_bounded_per_job(start_payload):
     assert jobs.bump_counter(job_id, "correctionRounds", 2) == 2
     # Third attempt is refused: the bound is per job, not per task retry.
     assert jobs.bump_counter(job_id, "correctionRounds", 2) is None
+
+
+# --- interrupted acceptance ------------------------------------------------
+
+
+def test_job_creation_resumes_when_it_was_interrupted_after_the_claim(
+    start_payload, wired
+):
+    """A failure between claiming idempotency and creating the job must not
+    poison the requestId.
+
+    The claim is durable the moment it is written, so if the next step fails the
+    retry sees created=False. Without a completeness check it would skip creation
+    entirely and leave a job that has no requestKey, which every stage and every
+    status lookup then rejects - permanently, since the claim never lets a second
+    creation through.
+    """
+    original = artifacts.put_json
+    calls = {"n": 0}
+
+    def fail_once(key, obj, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("s3 is down")
+        return original(key, obj, **kwargs)
+
+    artifacts.put_json = fail_once
+    try:
+        first = start(start_payload)
+        assert first["success"] is False
+
+        second = start(start_payload)
+    finally:
+        artifacts.put_json = original
+
+    assert second["success"] is True
+    job_id = second["jobId"]
+    assert jobs.job_exists(job_id)
+    # The recovered job is fully usable: the pipeline can find its request and
+    # the owner can read its status.
+    assert jobs.get_job(job_id, jobs.resolve_owner_scope(CALLER))["requestKey"]
+    readable = status(job_id)
+    assert readable["success"] is True
+    assert readable["status"] in (Status.QUEUED, Status.RUNNING)
+
+
+def test_a_stub_written_by_the_workflow_is_not_mistaken_for_a_job(wired):
+    """UpdateItem creates a bare item when none exists; that is not a job."""
+    jobs.set_stage("ghost", "PREFLIGHT")
+    assert jobs.job_exists("ghost") is False

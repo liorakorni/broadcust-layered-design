@@ -86,13 +86,24 @@ def run_layered_design(payload, caller_context):
         owner_scope, request.requestId, request_hash
     )
 
-    if created:
+    # The idempotency claim commits before the job record exists, so a failure in
+    # between would otherwise poison this requestId permanently: every retry sees
+    # the claim, skips creation, and leaves a job with no requestKey that every
+    # stage and status lookup then rejects. Finishing an unfinished creation here
+    # makes acceptance self-healing, the same way _ensure_execution reconciles a
+    # half-started execution.
+    if created or not jobs.job_exists(job_id):
         # Persist the canonical request before anything can consume it, so every
-        # stage reads identical bytes regardless of retries.
+        # stage reads identical bytes regardless of retries. Overwriting is safe
+        # and only matters on the recovery path: the key is derived from the job
+        # and the body is the canonical form of an already hash-matched request,
+        # so any object already there is identical.
         request_key = artifacts.artifact_key(
             job_id, Stage.ACCEPT_REQUEST, 1, "request.json"
         )
-        artifacts.put_json(request_key, request.model_dump(mode="json"))
+        artifacts.put_json(
+            request_key, request.model_dump(mode="json"), overwrite=True
+        )
         jobs.create_job(
             job_id,
             owner_scope,

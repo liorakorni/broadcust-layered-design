@@ -117,9 +117,11 @@ def get_bytes(job_id, key):
     return response["Body"].read()
 
 
-def put_json(key, obj):
+def put_json(key, obj, *, overwrite=False):
     data = json.dumps(obj, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    return put_bytes(key, data, "application/json; charset=utf-8")
+    return put_bytes(
+        key, data, "application/json; charset=utf-8", overwrite=overwrite
+    )
 
 
 def get_json(job_id, key):

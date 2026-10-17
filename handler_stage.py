@@ -94,12 +94,22 @@ def handler(event, context):
         artifacts = run(job_id=job_id, attempt=attempt, asset_id=asset_id)
     except LayeredDesignError as exc:
         _log(job_id, stage, attempt, started, error=exc.code)
+        # Only the exception class name and message survive the hop to Step
+        # Functions, so unless the stage travels inside the message RecordFailure
+        # cannot tell where the job died and reports every failure as the last
+        # stage. _stage_from_message is what reads this back.
+        if stage not in exc.message:
+            exc.message = f"{exc.message} [{stage}]"
+            exc.args = (exc.message,)
         raise
     except Exception:
         # Never surface a raw exception message: it can carry provider payloads.
+        # The stage name is our own constant and safe to include.
         log.exception("stage failed jobId=%s stage=%s", job_id, stage)
         _log(job_id, stage, attempt, started, error=Code.INTERNAL)
-        raise LayeredDesignError("Internal error.", stage=stage, code=Code.INTERNAL)
+        raise LayeredDesignError(
+            f"Internal error in {stage}.", stage=stage, code=Code.INTERNAL
+        )
 
     _log(job_id, stage, attempt, started)
     return {"ok": True, "stage": stage, "artifacts": artifacts}

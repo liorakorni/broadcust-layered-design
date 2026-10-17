@@ -233,3 +233,64 @@ def test_record_failure_persists_the_real_stage_and_code(monkeypatch):
     assert stored["status"] == "FAILED"
     assert stored["error"]["code"] == "NOT_IMPLEMENTED"
     assert stored["error"]["stage"] == "CONCEPT"
+
+
+def _round_trip_failure(monkeypatch, raiser, stage):
+    """Run a stage that fails, then record the failure the way the workflow does.
+
+    Step Functions only carries the exception class name and message across the
+    hop, so this reproduces that narrowing instead of passing the live exception.
+    """
+    from lib import jobs
+    from lib.errors import LayeredDesignError
+
+    table = FakeTable()
+    table.items["JOB#job-x"] = {"pk": "JOB#job-x"}
+    monkeypatch.setattr(jobs, "_tbl", lambda: table)
+    monkeypatch.setattr(handler_stage, "_registry", lambda: {stage: raiser})
+
+    with pytest.raises(LayeredDesignError) as caught:
+        handler_stage.handler(
+            {"jobId": "job-x", "stage": stage, "attempt": 1}, None
+        )
+
+    handler_stage.handler(
+        {
+            "jobId": "job-x",
+            "recordFailure": True,
+            "failure": {
+                "Error": type(caught.value).__name__,
+                "Cause": json.dumps({"errorMessage": str(caught.value)}),
+            },
+        },
+        None,
+    )
+    return table.items["JOB#job-x"]["error"]
+
+
+def test_an_unexpected_stage_error_is_reported_against_that_stage(monkeypatch):
+    """A crash in PREFLIGHT must not be reported as a FINALIZE failure.
+
+    The sanitized message deliberately carries no provider detail, so if it also
+    carries no stage the recorded error defaults to the last stage and sends
+    whoever is debugging to the wrong end of the pipeline.
+    """
+
+    def boom(**kwargs):
+        raise KeyError("requestKey")
+
+    error = _round_trip_failure(monkeypatch, boom, "PREFLIGHT")
+    assert error["stage"] == "PREFLIGHT"
+    assert error["code"] == "INTERNAL"
+
+
+def test_a_structured_stage_error_keeps_its_stage(monkeypatch):
+    from lib.errors import Code, RenderFailed
+
+    def boom(**kwargs):
+        raise RenderFailed("The headline overflows its box.")
+
+    error = _round_trip_failure(monkeypatch, boom, "RENDER")
+    assert error["stage"] == "RENDER"
+    assert error["code"] == Code.RENDER_FAILED
+    assert "headline overflows" in error["message"]

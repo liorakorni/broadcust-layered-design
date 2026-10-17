@@ -99,6 +99,18 @@ def claim_idempotency(owner_scope, request_id, request_hash):
     return existing["jobId"], False
 
 
+def job_exists(job_id):
+    """True only when `job_id` has a complete job record.
+
+    The workflow updates jobs with UpdateItem, which creates a bare item when
+    none exists. Such a stub has a status and a stage but no requestKey and no
+    ownerScope, and is useless to both the pipeline and the caller. Requiring
+    requestKey is what separates a real creation from that stub.
+    """
+    item = _tbl().get_item(Key={"pk": f"JOB#{job_id}"}).get("Item")
+    return bool(item and item.get("requestKey"))
+
+
 def create_job(job_id, owner_scope, request_hash, request_key, canvas):
     """Record the job as QUEUED before any execution starts."""
     _tbl().put_item(
