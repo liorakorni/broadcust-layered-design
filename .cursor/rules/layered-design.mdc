@@ -1,0 +1,55 @@
+---
+description: Non-negotiable invariants for the LayeredDesign service
+alwaysApply: true
+---
+
+The authoritative requirements are in `docs/SPEC.md`. The frozen interfaces are in
+`docs/CONTRACTS.md`. Read them before changing behaviour. Neither file is a summary —
+they are the contract.
+
+## Pinned model IDs
+
+These postdate most training data. Do NOT "correct" them to `gpt-image-1`, `dall-e-3`,
+`gpt-image-2`, `gpt-4o`, or `gpt-4-vision-preview`. `gpt-image-2` cannot produce
+transparent backgrounds; `gpt-4o` is deprecated with a 2027-01-14 shutdown. All IDs live
+in `conf.py` and are verified by `scripts/probe_image.py` and `scripts/probe_vision.py`.
+If the API rejects one, report it — never substitute a model from memory.
+
+| Constant | Value | Used by |
+|---|---|---|
+| `IMAGE_MODEL` | `gpt-image-2.5-sunburst` | CONCEPT, CLEAN_PHOTO, DECORATION_OVERLAY, INDEPENDENT_ASSETS |
+| `SCENE_MODEL` | `gpt-6-astra` | EXTRACT_SCENE (requires `detail="original"`) |
+| `REVIEW_MODEL` | `gpt-6-astra` | REVIEW (three images per call) |
+| `COPY_MODEL` | `gpt-5.6-terra` | PREPARE_COPY (text only) |
+
+## Invariants
+
+1. **No stub may return success.** An unimplemented stage raises `NotImplementedStage`
+   and fails the job. Never return `{"passed": true}`, placeholder URLs, or empty layer
+   lists to make a test go green.
+2. **Never invent business facts.** No prices, dates, phone numbers, claims or
+   credentials beyond `brief`. Padding a layout with invented services is a correctness
+   bug, not a style choice.
+3. **CLEAN_PHOTO and DECORATION_OVERLAY both edit the same immutable concept bytes.**
+   Never feed the cleaned photo into the overlay stage.
+4. **All geometry is pixels from the canvas top-left.** `fontSize` is px; `lineHeight`
+   is a dimensionless multiplier. Never mix normalized 0-1 coordinates with pixels. Any
+   vision call that returns coordinates passes `detail="original"`; anything else
+   silently returns coordinates in a resized frame.
+5. **Final text is real HTML text.** Never bake final copy into a raster asset; never use
+   CSS `background-image`, inline SVG, scripts, or clipping that hides overflow.
+6. **The HTML nesting in `docs/CONTRACTS.md` is verbatim.** Do not add wrapper divs,
+   rename classes, or "improve" the structure.
+7. **Stop and report rather than improvise.** If a provider capability is missing, fail
+   with the specified error code. Do not substitute a different model, fake transparency
+   by keying out white, or mock a stage to proceed.
+
+## Conventions
+
+- Python 3.12, synchronous boto3, module-level clients. Match the style of the sibling
+  repos `openai-image-api` and `broadcust-bedrock-api`.
+- Never log secrets, full base64, signed-URL query strings, or routine customer contact
+  content. Log `jobId`, `stage`, `attempt`, duration, error and provider request ID.
+- Artifact keys are immutable and append-only. A retry writes a new attempt; it never
+  overwrites an existing key.
+- Step Functions state carries only small pointers. Never image bytes or whole HTML.

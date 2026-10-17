@@ -1,0 +1,26 @@
+Produce an authoritative copy manifest for a marketing design.
+
+Rules:
+- Use ONLY facts present in the brief and business details below. Never invent
+  prices, dates, discounts, durations, phone numbers, addresses, credentials,
+  guarantees or claims.
+- Preserve the language of the brief exactly. Do not translate.
+- Condense for a poster without changing meaning. Short, punchy, readable.
+- Every string in REQUIRED TEXTS must appear verbatim as its own item.
+- Keep phone and email as separate items; never merge contact details.
+- If a role has no supporting fact, omit it. Do not pad the layout.
+
+Assign each item a stable contentKey in dot notation, for example
+title.primary, subtitle.primary, service.1, cta.primary, contact.phone,
+contact.email, contact.website, business.name.
+
+BRIEF:
+{post}
+
+BUSINESS:
+{business_block}
+
+REQUIRED TEXTS (must appear unchanged):
+{required_block}
+
+{instructions_block}

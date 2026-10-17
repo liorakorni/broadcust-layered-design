@@ -1,0 +1,361 @@
+{
+  "Comment": "LayeredDesign pipeline. State carries only jobId, stage, attempt and small artifact pointers - never image bytes or HTML.",
+  "StartAt": "Preflight",
+  "TimeoutSeconds": 1800,
+  "States": {
+    "Preflight": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "PREFLIGHT",
+        "attempt": 1,
+        "assetId": null
+      },
+      "ResultPath": "$.preflight",
+      "Retry": [
+        {
+          "ErrorEquals": ["ProviderError", "ProviderTimeout", "ProviderRateLimited"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "PrepareCopy"
+    },
+
+    "PrepareCopy": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "PREPARE_COPY",
+        "attempt": 1,
+        "assetId": null
+      },
+      "ResultPath": "$.prepareCopy",
+      "Retry": [
+        {
+          "ErrorEquals": ["ProviderError", "ProviderTimeout", "ProviderRateLimited", "InvalidModelJson"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "Concept"
+    },
+
+    "Concept": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "CONCEPT",
+        "attempt": 1,
+        "assetId": null
+      },
+      "ResultPath": "$.concept",
+      "Comment": "Paid image generation. ProviderOutcomeUnknown is deliberately NOT retried - a retry is exactly what would pay twice.",
+      "Retry": [
+        {
+          "ErrorEquals": ["ProviderRateLimited"],
+          "IntervalSeconds": 20,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "ExtractScene"
+    },
+
+    "ExtractScene": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "EXTRACT_SCENE",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.scene",
+      "Retry": [
+        {
+          "ErrorEquals": ["InvalidModelJson", "ProviderError", "ProviderTimeout", "ProviderRateLimited"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "SeparateLayers"
+    },
+
+    "SeparateLayers": {
+      "Type": "Parallel",
+      "Comment": "Both branches edit the SAME immutable concept bytes. They are never chained: the overlay must not be derived from the cleaned photo.",
+      "ResultPath": "$.separation",
+      "Branches": [
+        {
+          "StartAt": "CleanPhoto",
+          "States": {
+            "CleanPhoto": {
+              "Type": "Task",
+              "Resource": "${StageFunctionArn}",
+              "Parameters": {
+                "jobId.$": "$.jobId",
+                "stage": "CLEAN_PHOTO",
+                "attempt.$": "$.attempt",
+                "assetId": null
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["ProviderRateLimited"],
+                  "IntervalSeconds": 20,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "DecorationOverlay",
+          "States": {
+            "DecorationOverlay": {
+              "Type": "Task",
+              "Resource": "${StageFunctionArn}",
+              "Parameters": {
+                "jobId.$": "$.jobId",
+                "stage": "DECORATION_OVERLAY",
+                "attempt.$": "$.attempt",
+                "assetId": null
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["ProviderRateLimited"],
+                  "IntervalSeconds": 20,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "IndependentAssets"
+    },
+
+    "IndependentAssets": {
+      "Type": "Map",
+      "Comment": "At most three independent assets, concurrency two (SPEC section 4).",
+      "ItemsPath": "$.scene.artifacts.independentAssetIds",
+      "MaxConcurrency": 2,
+      "ResultPath": "$.independentAssets",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "INDEPENDENT_ASSETS",
+        "attempt.$": "$.attempt",
+        "assetId.$": "$$.Map.Item.Value"
+      },
+      "Iterator": {
+        "StartAt": "IndependentAsset",
+        "States": {
+          "IndependentAsset": {
+            "Type": "Task",
+            "Resource": "${StageFunctionArn}",
+            "Retry": [
+              {
+                "ErrorEquals": ["ProviderRateLimited"],
+                "IntervalSeconds": 20,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "ValidateAssets"
+    },
+
+    "ValidateAssets": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "VALIDATE_ASSETS",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.validation",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "Assemble"
+    },
+
+    "Assemble": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "ASSEMBLE",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.assemble",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "Render"
+    },
+
+    "Render": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "RENDER",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.render",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "Review"
+    },
+
+    "Review": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.review",
+      "Retry": [
+        {
+          "ErrorEquals": ["InvalidModelJson", "ProviderError", "ProviderTimeout"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "ReviewPassed"
+    },
+
+    "ReviewPassed": {
+      "Type": "Choice",
+      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it.",
+      "Choices": [
+        {
+          "Variable": "$.review.artifacts.approved",
+          "BooleanEquals": true,
+          "Next": "Finalize"
+        },
+        {
+          "Variable": "$.review.artifacts.correctionAvailable",
+          "BooleanEquals": true,
+          "Next": "Correct"
+        }
+      ],
+      "Default": "RecordFailure"
+    },
+
+    "Correct": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Consumes one bounded correction round. The counter is bounded per job in DynamoDB, not per task retry, so a Lambda retry cannot buy extra rounds.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "CORRECT"
+      },
+      "ResultPath": "$.correction",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "NextAttempt"
+    },
+
+    "NextAttempt": {
+      "Type": "Pass",
+      "Comment": "Advances the attempt counter and drops stale per-attempt state. Corrections loop back to ExtractScene so the layout is genuinely re-derived - re-running from ValidateAssets would re-check identical assets and produce the identical render.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "attempt.$": "$.correction.artifacts.nextAttempt"
+      },
+      "Next": "ExtractScene"
+    },
+
+    "Finalize": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "FINALIZE",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.finalize",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure" }
+      ],
+      "Next": "Succeeded"
+    },
+
+    "Succeeded": {
+      "Type": "Succeed"
+    },
+
+    "RecordFailure": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Persists the terminal stage/code/message on the job so getLayeredDesignStatus can report it.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "FINALIZE",
+        "attempt": 1,
+        "assetId": null,
+        "recordFailure": true,
+        "failure.$": "$.failure"
+      },
+      "ResultPath": "$.recorded",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.recordError", "Next": "Failed" }
+      ],
+      "Next": "Failed"
+    },
+
+    "Failed": {
+      "Type": "Fail",
+      "Comment": "The job record already carries the structured error; this just ends the execution."
+    }
+  }
+}

@@ -1,0 +1,26 @@
+You are reviewing a rendered marketing design against its concept.
+
+Image 1: the original concept (internal layout guide, NOT the deliverable).
+Image 2: the current render at native size.
+Image 3: the current render scaled to a 360px-wide feed view.
+
+Evaluate and report BLOCKING issues only for things that are genuinely wrong:
+- Text that is clipped, overflowing, overlapping another layer, or unreadable
+  against its background.
+- Text that does not match the approved copy below, or facts that were invented.
+- Missing layers, duplicated content, or an element appearing in two layers.
+- Decoration artwork that is missing, misaligned, or showing as an opaque block
+  where the photograph should show through.
+- Photographic leftovers in the decoration layer, or panel-shaped gaps in the
+  photograph.
+- Anything illegible or broken at the 360px feed size.
+
+Do NOT raise an issue merely because the render differs from the concept's
+layout. The concept is a guide, not a target; a different but well-executed
+composition is acceptable.
+
+APPROVED COPY (the only legitimate text):
+{copy_block}
+
+Return strict JSON: passed, blockingIssues (each with code, layerId, assetId,
+message), and suggestions. Use null for layerId or assetId when not applicable.

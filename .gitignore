@@ -1,0 +1,15 @@
+config.*.json
+!config.template.json
+.env
+.serverless/
+.idea/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+package-lock.json
+scripts/probe_out/
+
+# Corporate TLS-interception CAs are machine-specific; keep the directory, not the certs.
+assets/ca-certificates/*.crt

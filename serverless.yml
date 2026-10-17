@@ -1,0 +1,203 @@
+service: broadcust-layered-design
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  # x86_64, unlike the arm64 sibling services: Playwright's Chromium builds are
+  # far better supported here (SPEC section 3).
+  architecture: x86_64
+  region: us-east-1
+  deploymentBucket:
+    name: serverless-framework-deployments-us-east-1-b707af47-ecca
+  environment:
+    JOBS_TABLE: ${self:service}-${sls:stage}-jobs
+    ARTIFACT_BUCKET: ${self:service}-${sls:stage}-artifacts
+    STAGE_FUNCTION_NAME: ${self:service}-${sls:stage}-stage
+    WORKFLOW_ARN: !Ref LayeredDesignWorkflow
+    OPENAI_API_KEY: ${file(./config.${sls:stage}.json):openai_api_key}
+    CLOUDINARY_CLOUD_NAME: ${file(./config.${sls:stage}.json):cloudinary_cloud_name}
+    CLOUDINARY_API_KEY: ${file(./config.${sls:stage}.json):cloudinary_api_key}
+    CLOUDINARY_API_SECRET: ${file(./config.${sls:stage}.json):cloudinary_api_secret}
+  ecr:
+    images:
+      layered_design_image:
+        path: ./
+        platform: linux/amd64
+        # Docker 25+ attaches provenance/SBOM attestations, producing a manifest
+        # list that Lambda rejects. Same workaround as the sibling repos.
+        buildOptions:
+          - --provenance=false
+          - --sbom=false
+
+functions:
+  api:
+    name: ${self:service}-${sls:stage}-api
+    image:
+      name: layered_design_image
+      command:
+        - handler_api.handler
+    memorySize: 512
+    timeout: 30
+    role: ApiRole
+
+  stage:
+    name: ${self:service}-${sls:stage}-stage
+    image:
+      name: layered_design_image
+      command:
+        - handler_stage.handler
+    memorySize: 2048
+    timeout: 240
+    ephemeralStorageSize: 2048
+    role: StageRole
+
+resources:
+  Resources:
+    # --- Storage ------------------------------------------------------------
+    JobsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${sls:stage}-jobs
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: pk
+            AttributeType: S
+        KeySchema:
+          - AttributeName: pk
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: expiresAt
+          Enabled: true
+
+    ArtifactBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:service}-${sls:stage}-artifacts
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        LifecycleConfiguration:
+          Rules:
+            # Intermediate artifacts are diagnostic. Final designs live in
+            # Cloudinary, so nothing customer-facing expires with these.
+            - Id: expire-intermediate-artifacts
+              Status: Enabled
+              Prefix: layered-design/
+              ExpirationInDays: 30
+
+    # --- IAM: least privilege, one role per function ------------------------
+    ApiRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:service}-${sls:stage}-api-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: { Service: lambda.amazonaws.com }
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: api-job-access
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:PutItem
+                    - dynamodb:GetItem
+                    - dynamodb:UpdateItem
+                  Resource: !GetAtt JobsTable.Arn
+                # Start jobs and read results, but never write artifacts.
+                - Effect: Allow
+                  Action: states:StartExecution
+                  Resource: !Ref LayeredDesignWorkflow
+                - Effect: Allow
+                  Action: states:DescribeExecution
+                  Resource:
+                    !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${self:service}-${sls:stage}-workflow:*'
+                - Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub '${ArtifactBucket.Arn}/layered-design/*'
+
+    StageRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:service}-${sls:stage}-stage-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: { Service: lambda.amazonaws.com }
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: stage-artifact-access
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                  Resource: !Sub '${ArtifactBucket.Arn}/layered-design/*'
+                - Effect: Allow
+                  Action:
+                    - dynamodb:GetItem
+                    - dynamodb:UpdateItem
+                  Resource: !GetAtt JobsTable.Arn
+
+    WorkflowRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:service}-${sls:stage}-workflow-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: { Service: states.amazonaws.com }
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: invoke-stage
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: lambda:InvokeFunction
+                  Resource:
+                    !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${self:service}-${sls:stage}-stage'
+                - Effect: Allow
+                  Action:
+                    - dynamodb:UpdateItem
+                  Resource: !GetAtt JobsTable.Arn
+
+    # --- Workflow -----------------------------------------------------------
+    LayeredDesignWorkflow:
+      Type: AWS::StepFunctions::StateMachine
+      Properties:
+        StateMachineName: ${self:service}-${sls:stage}-workflow
+        StateMachineType: STANDARD
+        RoleArn: !GetAtt WorkflowRole.Arn
+        Definition: ${file(./workflow.asl.json)}
+        DefinitionSubstitutions:
+          StageFunctionArn:
+            !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${self:service}-${sls:stage}-stage'
+          JobsTable: ${self:service}-${sls:stage}-jobs
+
+  Outputs:
+    ArtifactBucketName:
+      Value: !Ref ArtifactBucket
+    JobsTableName:
+      Value: !Ref JobsTable
+    WorkflowArn:
+      Value: !Ref LayeredDesignWorkflow
+    ApiFunctionName:
+      Value: ${self:service}-${sls:stage}-api

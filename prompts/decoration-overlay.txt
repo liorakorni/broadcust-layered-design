@@ -1,0 +1,26 @@
+Extract ONLY the graphic artwork from this image onto a fully transparent
+background.
+
+KEEP, in their exact original positions and at their exact original size:
+- Decorative panels, ribbons, banners, badges and framing shapes.
+- Button and call-to-action background shapes.
+- Ornamental flourishes, dividers, icons and graphic texture that supports text.
+
+REMOVE completely:
+- The entire photographic scene: sky, landscape, buildings, people, foliage,
+  objects, and every photographic texture.
+- Every word, letter, number and logo. Keep the panel a word sat on, but not
+  the word itself.
+- Any independent inset photos or cut-out subjects.
+
+TRANSPARENCY REQUIREMENTS:
+- Everywhere the photograph showed through must be genuinely transparent with a
+  real alpha channel. Not white. Not black. Not grey. Not a drawn checkerboard
+  pattern.
+- Keep the graphic panels themselves opaque where they were opaque.
+- Keep soft edges, glows and shadows partially transparent so they blend.
+- Do not add any new background, frame, border or backdrop.
+
+The result must align exactly with the full {width}x{height} canvas, so that
+laying it over the cleaned photograph reproduces the original composition minus
+the text.

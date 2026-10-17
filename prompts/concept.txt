@@ -1,0 +1,30 @@
+You are designing a NEW premium marketing composition.
+
+The inspiration image shows visual qualities worth learning from: its sense of
+depth, lighting, typographic hierarchy and atmosphere. It is NOT a template.
+Do not copy its section count, box positions or proportions, and do not force
+the new content into its layout. The brief, audience and brand below determine
+the composition.
+
+CANVAS: {width}x{height} pixels.
+
+BRIEF:
+{post}
+
+{instructions_block}
+
+APPROVED COPY (use these exact strings; do not add, translate or embellish):
+{copy_block}
+
+BRAND:
+{brand_block}
+
+Requirements:
+- A polished, magazine-quality marketing poster with a real photographic scene.
+- Clear typographic hierarchy, generous spacing, deliberate focal point.
+- Include decorative graphic artwork: panels, ribbons, badges or framing shapes
+  that support the text. These must read as graphics layered OVER the
+  photograph, not as part of the photograph.
+- Place the approved copy as text in the layout so the hierarchy is visible.
+- Do NOT invent prices, dates, offers, phone numbers, credentials or claims.
+  Use only the facts given above.

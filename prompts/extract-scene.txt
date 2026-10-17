@@ -1,0 +1,36 @@
+Analyse this marketing composition and return a strict JSON scene description.
+
+COORDINATES:
+- Use PIXELS measured from the TOP-LEFT corner of the image.
+- The canvas is exactly {width}x{height}. Every layer must fit inside it.
+- fontSize is in pixels. lineHeight is a DIMENSIONLESS MULTIPLIER
+  (for example 1.12), never a pixel value.
+- zIndex is an integer 0..100.
+
+TEXT LAYERS:
+- One layer per visually distinct text block. A headline split across two lines
+  with different sizing is two layers.
+- Every layer must reference a contentKey from the approved copy below, and the
+  text must be that copy EXACTLY. Do not invent, translate, reword or extend it.
+- Do not create a layer for copy that is not in the list, and do not use the
+  same contentKey twice.
+- Hebrew text uses direction "rtl" and align "right". Latin contact details
+  (phone, email, website) use direction "ltr".
+- Choose fontFamily only from: {fonts}
+
+APPROVED COPY:
+{copy_block}
+
+IMAGE LAYERS:
+- background: the full-canvas photograph, zIndex 0.
+- decoration: the full-canvas graphic overlay, zIndex 1.
+- image: any independent inset photo, product or subject that needs separate
+  placement.
+
+OVERLAY SAMPLES:
+- Report up to 8 regions where the decoration overlay MUST be transparent
+  (kind "transparent") because the photograph shows through there.
+- Report up to 8 regions where it MUST be opaque (kind "opaque") because a solid
+  graphic panel sits there.
+- These are used to verify the separation, so choose clearly representative
+  areas well inside each region rather than on a boundary.

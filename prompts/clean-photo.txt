@@ -1,0 +1,20 @@
+Edit this image into a clean PHOTOGRAPH ONLY.
+
+Remove completely:
+- Every word, letter, number and logo.
+- All graphic panels, ribbons, badges, buttons and ornamental framing shapes.
+- Any separately planned foreground ornaments.
+- Any independent inset photos, products or cut-out subjects.
+
+Then RECONSTRUCT the photographic scene that belongs behind everything you
+removed, so the result looks like a photograph that was taken that way:
+- Continue the landscape, architecture, sky, textures and lighting naturally
+  across the areas the removed elements covered.
+- Do NOT leave blank, flat or panel-shaped gaps where graphics used to be.
+- Do NOT leave ghosting, smudges or rectangles of altered colour.
+
+Preserve:
+- The original photographic lighting, colour grading, depth of field and mood.
+- Relevant scenery and ordinary people who are part of the scene.
+
+Output a complete, natural photograph at {width}x{height}. No text anywhere.

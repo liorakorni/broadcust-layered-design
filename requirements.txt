@@ -1,0 +1,11 @@
+# Pinned exactly. The Playwright Python version must match the Chromium installed
+# in the Dockerfile, so bumping one means rebuilding and re-verifying the other.
+openai==1.109.1
+pydantic==2.14.1
+pillow==11.3.0
+cloudinary==1.46.3
+playwright==1.64.0
+
+# boto3 ships in the Lambda base image, but is pinned here so local runs and tests
+# exercise the same version.
+boto3==1.43.114
