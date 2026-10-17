@@ -65,7 +65,11 @@ SCENE_SCHEMA = {
                 ],
                 "properties": {
                     "id": {"type": "string"},
-                    "role": {"type": "string"},
+                    # Constrained here rather than only in the validator: an open
+                    # string lets the model invent a role, which is then rejected
+                    # after both this call and the image generation before it have
+                    # already been paid for.
+                    "role": {"type": "string", "enum": list(schemas.ALLOWED_ROLES)},
                     "contentKey": {"type": "string"},
                     "text": {"type": "string"},
                     **_BOX,

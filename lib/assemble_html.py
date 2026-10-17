@@ -20,21 +20,10 @@ import html
 from lib.errors import AssemblyFailed
 
 #: Roles permitted on a text layer (docs/CONTRACTS.md section 5).
-ALLOWED_ROLES = (
-    "businessName",
-    "businessDescriptor",
-    "title",
-    "subtitle",
-    "serviceItem",
-    "expertiseItem",
-    "benefitItem",
-    "informationItem",
-    "eventDetail",
-    "offerDetail",
-    "cta",
-    "userInformation",
-    "icon",
-)
+#: Re-exported from schemas so there is one allowlist rather than two copies to
+#: keep in step. A role accepted by the validator but missing here would pass
+#: EXTRACT_SCENE and then fail assembly, several paid calls later.
+from lib.schemas import ALLOWED_ROLES  # noqa: E402
 
 
 def assemble(scene, assets, canvas):

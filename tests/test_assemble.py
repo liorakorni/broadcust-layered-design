@@ -250,3 +250,22 @@ def test_unknown_object_fit_rejected():
     layers[0] = dict(layers[0], objectFit="fill")
     with pytest.raises(AssemblyFailed, match="not one of"):
         assemble(scene(imageLayers=layers), ASSETS, CANVAS)
+
+
+def test_the_scene_schema_constrains_roles_to_the_validated_allowlist():
+    """The model must not be able to emit a role that is rejected downstream.
+
+    An open-ended role string is only caught by the validator, after the image
+    generation and the vision call have both been paid for.
+    """
+    from lib.schemas import ALLOWED_ROLES
+    from lib.stages.extract_scene import SCENE_SCHEMA
+
+    role = SCENE_SCHEMA["properties"]["textLayers"]["items"]["properties"]["role"]
+    assert role.get("enum") == list(ALLOWED_ROLES)
+
+
+def test_assembly_and_validation_share_one_role_allowlist():
+    from lib import assemble_html, schemas
+
+    assert assemble_html.ALLOWED_ROLES is schemas.ALLOWED_ROLES
