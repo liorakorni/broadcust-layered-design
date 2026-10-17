@@ -139,3 +139,74 @@ of headroom — but worth revisiting if cold starts show up in practice.
 **To close.** Install only `chromium-headless-shell`, or move Chromium into a
 Lambda layer so application changes stop rebuilding it. Measure the cold start
 first; this is an optimisation without a demonstrated problem.
+
+---
+
+## 6. Text layers overflow their boxes because every box is one line tall
+
+**State.** The first full live run reached REVIEW and was rejected with eight
+blocking issues, five of them `TEXT_OVERFLOW`. The overflow ratios were
+remarkably consistent — 1.90, 1.93, 1.95, 2.02, 2.10, mean 1.96 — which is not a
+scattering of bad guesses but one mechanism firing repeatedly.
+
+The scene geometry explains it. EXTRACT_SCENE sizes every box for exactly one
+line of text:
+
+| layer | box | fontSize | lineHeight | one line needs |
+|---|---|---|---|---|
+| `headline` | 622x84 | 74 | 1.1 | 81px |
+| `ribbon-subtitle` | 547x46 | 37 | 1.12 | 41px |
+| `services` | 521x37 | 30 | 1.12 | 34px |
+| `business-name` | 182x40 | 33 | 1.1 | 36px |
+
+Every height has only a few pixels of slack. So the moment the text is even
+slightly too wide for the box it wraps to a second line, and the height
+immediately doubles — which is exactly the ~1.96 ratio observed. REVIEW measured
+`text-1002` at 280px wide in a 260px box: a 7% width underestimate produced a
+110% height overflow.
+
+The width underestimate itself is expected. The model reads the box off the
+concept image, where the text was drawn in whatever face the image model chose,
+and the design then renders in Heebo, which sets wider.
+
+**Why it matters.** This is not an occasional defect. A single-line box plus any
+width underestimate is a guaranteed overflow, so most jobs will arrive at REVIEW
+with blocking issues and burn correction rounds on the same mechanical problem.
+
+**To close.** Options, roughly in order of reliability:
+
+1. Measure before committing to a size. ASSEMBLE already runs in a container
+   with the real fonts, so it can lay the text out and shrink `fontSize` (or
+   grow the box) until it fits, rather than discovering the overflow one stage
+   later in RENDER. Deterministic, costs no provider calls.
+2. Give the boxes vertical slack in the EXTRACT_SCENE prompt — ask for two lines
+   of height where the copy may wrap. Cheap, but still a guess.
+3. Leave it to the correction loop. It is what the loop is for, but it spends a
+   paid round per attempt on a defect that is predictable without asking anyone.
+
+Option 1 needs a check against SPEC section 7's allowlisted style fields before
+being implemented; it changes typography outside the scene patch mechanism.
+
+---
+
+## 7. A correction round after an overlay repair has no repair budget left
+
+**State.** SPEC section 4 bounds overlay repairs to "two per job, not two per
+task retry", and the implementation honours that literally. The live run spent
+both repairs on attempt 1, passed validation, rendered, and was then sent back
+for a correction round. Attempt 2 regenerated the overlay from the concept, that
+fresh overlay was rejected by the region check, and there was no repair budget
+left — so the job ended there.
+
+**Why it matters.** The interaction, not either bound on its own, is the
+problem: a correction round regenerates assets, and regenerated assets are about
+as likely to need a repair as the originals were. Any job that uses its repairs
+early and later takes a correction round is therefore likely to die, which makes
+the correction loop much less useful than it looks.
+
+This is faithful to the spec as written, so it is a question about the spec
+rather than a defect in the code.
+
+**To close.** Decide which the spec means: a per-job bound on paid repair calls
+(current reading, cheap, fragile), or a per-attempt bound with a per-job ceiling
+(more forgiving, more expensive). Needs the requester's input.
