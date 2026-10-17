@@ -68,7 +68,23 @@ class FakeTable:
             if "." in target:
                 parent, child = target.split(".", 1)
                 child = resolve(child)
-                item.setdefault(parent, {})[child] = values[expr.strip()]
+                if not isinstance(item.get(parent), dict):
+                    # DynamoDB will not create a parent map on the way to a
+                    # nested attribute; the whole update is rejected instead.
+                    # Creating it here would hide a write that fails in AWS.
+                    raise ClientError(
+                        {
+                            "Error": {
+                                "Code": "ValidationException",
+                                "Message": (
+                                    "The document path provided in the update "
+                                    "expression is invalid for update"
+                                ),
+                            }
+                        },
+                        "UpdateItem",
+                    )
+                item[parent][child] = values[expr.strip()]
                 continue
             inc = re.match(r"^([\w#.]+)\s*\+\s*(:\w+)$", expr)
             if inc:

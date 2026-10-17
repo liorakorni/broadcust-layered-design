@@ -286,3 +286,31 @@ def test_a_stub_written_by_the_workflow_is_not_mistaken_for_a_job(wired):
     """UpdateItem creates a bare item when none exists; that is not a job."""
     jobs.set_stage("ghost", "PREFLIGHT")
     assert jobs.job_exists("ghost") is False
+
+
+# --- artifact recording ----------------------------------------------------
+
+
+def test_every_stage_can_record_artifacts_on_a_fresh_job(start_payload, wired):
+    """create_job must initialise the maps that record_artifacts writes into.
+
+    DynamoDB rejects `SET artifacts.#stage` when `artifacts` is absent instead of
+    creating it, so an uninitialised map fails the very first stage of every job.
+    """
+    from lib.errors import Stage
+
+    job_id = start(start_payload)["jobId"]
+    for stage in Stage.PIPELINE:
+        jobs.record_artifacts(job_id, stage, 1, {"photo": "some/key.png"})
+
+    stored = wired["table"].items[f"JOB#{job_id}"]
+    assert set(stored["artifacts"]) == set(Stage.PIPELINE)
+
+
+def test_nested_write_without_its_parent_map_is_rejected(wired):
+    """Guards the fake itself: silently creating the parent would hide the bug."""
+    from botocore.exceptions import ClientError
+
+    jobs.set_stage("stub", "PREFLIGHT")
+    with pytest.raises(ClientError, match="document path"):
+        jobs.record_artifacts("stub", "PREFLIGHT", 1, {"photo": "k"})

@@ -124,6 +124,10 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas):
             "requestKey": request_key,
             "canvasWidth": canvas["width"],
             "canvasHeight": canvas["height"],
+            # Both maps must exist up front: record_artifacts writes into them by
+            # stage name, and DynamoDB rejects a nested write whose parent map is
+            # absent rather than creating it.
+            "artifacts": {},
             "attempts": {},
             "correctionRounds": 0,
             "overlayRepairs": 0,

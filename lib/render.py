@@ -23,10 +23,21 @@ from lib.errors import FontMissing, RenderFailed
 
 #: Chromium needs these in Lambda: no sandbox (no user namespaces) and /dev/shm
 #: is only 64MB, which crashes the renderer on large pages.
+#:
+#: --single-process and --no-zygote matter as much as the sandbox flags. Lambda
+#: lets the browser process start but the forked zygote cannot bring up a
+#: renderer, so launch() succeeds and the first new_page() reports "Target
+#: crashed" with no browser log to explain it. Collapsing everything into one
+#: process avoids the fork entirely. --disable-software-rasterizer stops
+#: Chromium from retrying a GPU process it can never start.
 _LAUNCH_ARGS = [
     "--no-sandbox",
+    "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--single-process",
+    "--no-zygote",
     "--font-render-hinting=none",
 ]
 
