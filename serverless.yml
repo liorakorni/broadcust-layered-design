@@ -131,6 +131,14 @@ resources:
                 - Effect: Allow
                   Action: s3:GetObject
                   Resource: !Sub '${ArtifactBucket.Arn}/layered-design/*'
+                # The API persists the canonical request so every stage reads
+                # identical bytes regardless of retries. That is the only thing
+                # it writes, so the grant is scoped to that one stage prefix
+                # rather than to the whole job tree.
+                - Effect: Allow
+                  Action: s3:PutObject
+                  Resource:
+                    !Sub '${ArtifactBucket.Arn}/layered-design/*/ACCEPT_REQUEST/*'
 
     StageRole:
       Type: AWS::IAM::Role
