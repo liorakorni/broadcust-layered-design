@@ -4,9 +4,9 @@ Things that work today but are not where they should end up. Each entry says wha
 the current state is, why it matters, and what closing it involves — so the
 decision to defer stays a decision rather than becoming an accident.
 
-None of these block the dev deploy. Two of them block a second developer, and one
-is a credential-handling inconsistency worth closing before this service carries
-real traffic.
+None of these block the dev deploy. One is a credential-handling inconsistency
+worth closing before this service carries real traffic, and two are about how
+little stands between a laptop and production.
 
 ---
 
@@ -114,16 +114,25 @@ see how `validate_media` accepts a secret ARN *or* direct values.
 
 ---
 
-## 4. No git remote
+## 4. No CI
 
-**State.** The repo has local commits on `main` and `dev` and no remote. `gh` is
-not installed on this machine, so the remote was never created.
+**State.** The repo is now on GitHub at `liorakorni/broadcust-layered-design`
+(private), with `main` and `dev` both pushed and tracking. What is still missing
+is anything that runs on a push: no workflow, no test run, no deploy.
 
-**Why it matters.** The entire service exists on one laptop. There is no backup,
-no review path, and no CI.
+So the 222 tests only ever run when someone remembers to run them, and the
+branch-to-stage rule that `scripts/deploy.sh` enforces — `dev` to dev, `main` to
+live — is enforced only on the laptop doing the deploying.
 
-**To close.** Install `gh`, authenticate, `gh repo create`, push both branches.
-Ten minutes.
+**Why it matters.** Several of the defects found by deploying were invisible to
+the test suite but would have been caught by running it anywhere other than the
+machine that wrote the code — the missing `requests` dependency is the clearest
+example, since it was present in the developer's venv and nowhere else.
+
+**To close.** A workflow running `pytest` on push and on pull requests is the
+cheap half, and worth doing regardless. Deploying from CI is the expensive half:
+it needs AWS credentials that are not root (see gap 2) and a decision about
+whether `main` should deploy to live automatically or on a tag.
 
 ---
 
