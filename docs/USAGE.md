@@ -138,36 +138,36 @@ successful lookup: `success: true` with `status: "FAILED"`.
     "canvas": { "width": 1024, "height": 1024 },
     "html": "<div class=\"image container\" style=\"opacity:1;width:1024px;…",
     "htmlHash": "31d9c20b0539ac4acd2f6301218202424a9b262d5a9fcb7f82a9c15b61654cd1",
-    "preview": "https://res.cloudinary.com/broadcust/layered-design-dev/9f2c1a7b/preview.png",
+    "preview": "https://res.cloudinary.com/broadcust/image/upload/v1792268625/layered-design-dev/9f2c1a7b/preview.png",
     "assetManifestHash": "4002445200db6e2254b564aee7950444ea8228b289c596a3067dc437a0f7e619",
     "assets": [
       {
         "assetId": "background",
-        "url": "https://res.cloudinary.com/broadcust/layered-design-dev/9f2c1a7b/background.png",
-        "sha256": "5afce9c27470433df0932ccb0fbb9452e598c72c07dd063f57031352ffce1911"
+        "url": "https://res.cloudinary.com/broadcust/image/upload/v1792268616/layered-design-dev/9f2c1a7b/background.png",
+        "sha256": "6cf14b062cc0ba3b0e8b4f6c2a1d9e7f3b5c8a2d4e6f1a3b5c7d9e1f2a4b6c8d"
       },
       {
         "assetId": "decoration",
-        "url": "https://res.cloudinary.com/broadcust/layered-design-dev/9f2c1a7b/decoration.png",
-        "sha256": "d01954018e52a6e8ce979b3c574ea5476c0f336431416c08a53fb54f67c841a8"
+        "url": "https://res.cloudinary.com/broadcust/image/upload/v1792268616/layered-design-dev/9f2c1a7b/decoration.png",
+        "sha256": "2c44268d153626b1f7a9c3e5d8b2f4a6c9e1d3b5f7a9c2e4d6b8f1a3c5e7d9b2"
       },
       {
         "assetId": "preview",
-        "url": "https://res.cloudinary.com/broadcust/layered-design-dev/9f2c1a7b/preview.png",
-        "sha256": "5afce9c27470433df0932ccb0fbb9452e598c72c07dd063f57031352ffce1911"
+        "url": "https://res.cloudinary.com/broadcust/image/upload/v1792268625/layered-design-dev/9f2c1a7b/preview.png",
+        "sha256": "4a65f85a9111b044c2e6d8f1a3b5c7e9d2f4a6b8c1e3d5f7a9b2c4e6d8f1a3b5"
       }
     ],
     "layerMap": [
-      { "id": "l_bg",    "kind": "background",  "assetId": null, "zIndex": 0,
+      { "id": "background-photo", "kind": "background", "assetId": null, "zIndex": 0,
         "box": { "x": 0, "y": 0, "width": 1024, "height": 1024 } },
-      { "id": "l_deco",  "kind": "decoration",  "assetId": null, "zIndex": 1,
+      { "id": "graphic-overlay",  "kind": "decoration", "assetId": null, "zIndex": 1,
         "box": { "x": 0, "y": 0, "width": 1024, "height": 1024 } },
-      { "id": "t_title", "kind": "text", "role": "title", "contentKey": "title.primary", "zIndex": 10,
-        "box": { "x": 120, "y": 140, "width": 700, "height": 160 } },
-      { "id": "t_sub",   "kind": "text", "role": "subtitle", "contentKey": "subtitle.primary", "zIndex": 11,
-        "box": { "x": 120, "y": 320, "width": 700, "height": 80 } },
-      { "id": "t_phone", "kind": "text", "role": "userInformation", "contentKey": "contact.phone", "zIndex": 12,
-        "box": { "x": 120, "y": 920, "width": 300, "height": 48 } }
+      { "id": "headline", "kind": "text", "role": "title", "contentKey": "title.primary", "zIndex": 2,
+        "box": { "x": 472, "y": 48, "width": 466, "height": 174 } },
+      { "id": "subtitle", "kind": "text", "role": "subtitle", "contentKey": "subtitle.primary", "zIndex": 2,
+        "box": { "x": 452, "y": 260, "width": 508, "height": 42 } },
+      { "id": "phone", "kind": "text", "role": "userInformation", "contentKey": "contact.phone", "zIndex": 2,
+        "box": { "x": 125, "y": 939, "width": 165, "height": 38 } }
     ]
   }
 }
@@ -218,6 +218,28 @@ pixels from the top-left, its stacking order, and for text its `role` and
 All coordinates are **pixels from the canvas top-left**. `fontSize` is pixels;
 `lineHeight` is a dimensionless multiplier. Normalized 0–1 coordinates are never
 used anywhere.
+
+Layer `id`s are chosen per design and are not stable between jobs. Use `role`
+and `contentKey` to identify a layer's purpose; use `id` only to match a
+`layerMap` entry to its element within the same design.
+
+### Text is fitted to its box before delivery
+
+Font sizes in the delivered design may be slightly smaller than the layout
+originally called for. Before the design is rendered, each text block is
+measured in the same browser that renders it, and any block whose text does not
+fit its box is reduced to the largest size that does — typically by a few
+percent, and never below 75% of the original.
+
+This exists because a box that is even slightly too narrow does not overflow a
+little, it overflows a lot: the text wraps onto a second line and the block
+doubles in height. Measuring with the real font catches that before it reaches
+your design.
+
+Reductions are bounded on purpose. Text that still does not fit at the floor is
+left at the floor and reported as a defect rather than shrunk further, because
+illegible text that passes inspection is worse than visible overflow that does
+not.
 
 ---
 
@@ -301,10 +323,16 @@ than being delivered.
 | Correction rounds | 2 |
 | Overlay repairs | 2 |
 | Job duration | 30 minutes |
-| Artifact retention | 30 days for intermediates; delivered assets persist |
+| Job and artifact retention | 30 days; delivered assets on the media CDN persist |
 
 Designs are generated at the nearest supported aspect (1024×1024, 1024×1536 or
 1536×1024) and resampled to your exact canvas.
+
+**Store the result when you receive it.** After 30 days the job record and its
+stored HTML both expire, and `getLayeredDesignStatus` will return
+`JOB_NOT_FOUND` for a design that previously succeeded. The published asset and
+preview URLs keep working, because those live on the media CDN rather than in
+the job's storage — but the `html` is only retrievable while the job is.
 
 ---
 
@@ -320,6 +348,16 @@ aws lambda invoke \
   /dev/stdout
 ```
 
-There is no HTTP endpoint yet — unlike `openai-image-api`, which uses Lambda
-Function URLs. Add one in front if you need external callers; the `ownerScope`
-must then be derived from the authenticated session rather than passed through.
+**There is deliberately no HTTP endpoint.** No Function URL and no API Gateway,
+unlike `openai-image-api`. The caller is an authenticated application that
+invokes the Lambda directly, which is what SPEC section 7 describes and what
+keeps paid image generation off a publicly reachable URL.
+
+If you do put HTTP in front of it, `ownerScope` must be derived from the
+authenticated session there. It is the only thing separating one tenant's jobs
+from another's, so a request body that can set it is a request body that can
+read someone else's designs.
+
+The optional Bedrock Action Group adapter from SPEC section 7 is **not
+implemented**: the handler dispatches on an explicit `operation` field and does
+not read Bedrock `parameters` or emit its response envelope.
