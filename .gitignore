@@ -13,3 +13,4 @@ scripts/probe_out/
 
 # Corporate TLS-interception CAs are machine-specific; keep the directory, not the certs.
 assets/ca-certificates/*.crt
+.DS_Store
