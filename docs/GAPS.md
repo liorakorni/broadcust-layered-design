@@ -151,50 +151,35 @@ first; this is an optimisation without a demonstrated problem.
 
 ---
 
-## 6. Text layers overflow their boxes because every box is one line tall
+## 6. Text fitting compensates for box geometry rather than correcting it
 
-**State.** The first full live run reached REVIEW and was rejected with eight
-blocking issues, five of them `TEXT_OVERFLOW`. The overflow ratios were
-remarkably consistent — 1.90, 1.93, 1.95, 2.02, 2.10, mean 1.96 — which is not a
-scattering of bad guesses but one mechanism firing repeatedly.
+**Closed, with a residual.** The first full live run was rejected by REVIEW with
+five `TEXT_OVERFLOW` issues whose ratios clustered at 1.90, 1.93, 1.95, 2.02 and
+2.10 — one mechanism, not scattered bad guesses. EXTRACT_SCENE sizes every box
+for exactly one line, so a box a few percent too narrow for Heebo wraps to a
+second line and the height doubles. A 7% width underestimate produced a 110%
+height overflow.
 
-The scene geometry explains it. EXTRACT_SCENE sizes every box for exactly one
-line of text:
+ASSEMBLE now measures each block in the browser that will render it and reduces
+`fontSize` to the largest size that fits, bounded at 75% of the requested size.
+The next run came back with zero render problems and was approved without a
+correction round, reducing the headline from 89px to 79px and the subtitle from
+32px to 31px.
 
-| layer | box | fontSize | lineHeight | one line needs |
-|---|---|---|---|---|
-| `headline` | 622x84 | 74 | 1.1 | 81px |
-| `ribbon-subtitle` | 547x46 | 37 | 1.12 | 41px |
-| `services` | 521x37 | 30 | 1.12 | 34px |
-| `business-name` | 182x40 | 33 | 1.1 | 36px |
+**What remains.** The fit treats the symptom. EXTRACT_SCENE still sizes boxes for
+a single line and still estimates widths from a concept drawn in another
+typeface, so every design arrives slightly too large and is quietly shrunk to
+fit. That is fine while the error stays small, and the floor keeps it honest
+when it does not — text that cannot fit at 75% is left and reported rather than
+shrunk into illegibility. But it means the delivered typography is systematically
+a little smaller than the design intended, and nothing currently reports how
+often the floor is being hit.
 
-Every height has only a few pixels of slack. So the moment the text is even
-slightly too wide for the box it wraps to a second line, and the height
-immediately doubles — which is exactly the ~1.96 ratio observed. REVIEW measured
-`text-1002` at 280px wide in a 260px box: a 7% width underestimate produced a
-110% height overflow.
-
-The width underestimate itself is expected. The model reads the box off the
-concept image, where the text was drawn in whatever face the image model chose,
-and the design then renders in Heebo, which sets wider.
-
-**Why it matters.** This is not an occasional defect. A single-line box plus any
-width underestimate is a guaranteed overflow, so most jobs will arrive at REVIEW
-with blocking issues and burn correction rounds on the same mechanical problem.
-
-**To close.** Options, roughly in order of reliability:
-
-1. Measure before committing to a size. ASSEMBLE already runs in a container
-   with the real fonts, so it can lay the text out and shrink `fontSize` (or
-   grow the box) until it fits, rather than discovering the overflow one stage
-   later in RENDER. Deterministic, costs no provider calls.
-2. Give the boxes vertical slack in the EXTRACT_SCENE prompt — ask for two lines
-   of height where the copy may wrap. Cheap, but still a guess.
-3. Leave it to the correction loop. It is what the loop is for, but it spends a
-   paid round per attempt on a defect that is predictable without asking anyone.
-
-Option 1 needs a check against SPEC section 7's allowlisted style fields before
-being implemented; it changes typography outside the scene patch mechanism.
+**To close.** Two things worth doing, neither urgent. Ask EXTRACT_SCENE for box
+heights that allow for wrapping, so the fit has less to absorb. And surface the
+`fitted` record ASSEMBLE already persists — it holds the original and fitted size
+per layer — so a run of designs can be checked for layers pinned at the floor,
+which is the signal that the geometry is wrong rather than merely tight.
 
 ---
 
