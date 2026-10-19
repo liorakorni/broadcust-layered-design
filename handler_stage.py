@@ -83,9 +83,32 @@ def handler(event, context):
     if event.get("operation") == "CORRECT":
         from lib.stages import review
 
-        artifacts = review.correct(job_id=job_id, attempt=attempt)
+        try:
+            artifacts = review.correct(job_id=job_id, attempt=attempt)
+        except LayeredDesignError as exc:
+            # As for CORRECT_CONCEPT below: without the stage in the message
+            # RecordFailure reports the exhaustion against FINALIZE.
+            if Stage.REVIEW not in exc.message:
+                exc.message = f"{exc.message} [{Stage.REVIEW}]"
+                exc.args = (exc.message,)
+            raise
         _log(job_id, Stage.REVIEW, attempt, started)
         return {"ok": True, "stage": Stage.REVIEW, "artifacts": artifacts}
+
+    if event.get("operation") == "CORRECT_CONCEPT":
+        from lib.stages import review_concept
+
+        try:
+            artifacts = review_concept.correct_concept(job_id=job_id, attempt=attempt)
+        except LayeredDesignError as exc:
+            # Carry the stage through Step Functions inside the message, as the
+            # pipeline stages below do, so RecordFailure reports REVIEW_CONCEPT.
+            if Stage.REVIEW_CONCEPT not in exc.message:
+                exc.message = f"{exc.message} [{Stage.REVIEW_CONCEPT}]"
+                exc.args = (exc.message,)
+            raise
+        _log(job_id, Stage.REVIEW_CONCEPT, attempt, started)
+        return {"ok": True, "stage": Stage.REVIEW_CONCEPT, "artifacts": artifacts}
 
     if stage not in Stage.PIPELINE:
         raise LayeredDesignError(
@@ -192,7 +215,9 @@ def _error_classes():
 
 
 def _stage_from_message(message):
-    for stage in Stage.PIPELINE:
+    # Longest name first: CONCEPT is a substring of REVIEW_CONCEPT, so scanning in
+    # pipeline order would record every REVIEW_CONCEPT failure against CONCEPT.
+    for stage in sorted(Stage.PIPELINE, key=len, reverse=True):
         if stage in message:
             return stage
     return None

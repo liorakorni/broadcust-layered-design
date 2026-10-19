@@ -137,8 +137,8 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
 def _concept_bytes(job_id, job):
     """Read the one immutable concept both branches must edit.
 
-    Deliberately reads CONCEPT's own artifact rather than accepting a key from
-    workflow state, so neither branch can be pointed at the other's output.
+    Deliberately reads the frozen approved concept from the job rather than
+    accepting a key from workflow state, so neither branch can be pointed at the other's output.
     """
-    key = job["artifacts"][Stage.CONCEPT]["concept"]
+    key = jobs.approved_concept(job)["key"]
     return artifacts.get_bytes(job_id, key)

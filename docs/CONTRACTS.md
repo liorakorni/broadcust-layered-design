@@ -91,10 +91,11 @@ that writes artifacts.
 SPEC 7.5's `final/` key paths are illustrative. Decisions:
 
 1. **Keys.** Keep the `<stage>/<attempt>` structure and the combined `result.json`.
-   Return `resultKey`; return `htmlKey`, `previewKey` and `reviewKey` for objects
-   that exist. Do not return `layersKey` or `qaKey`, and create no files merely to
-   match the example paths. QA is embedded in `result.json` as `qa` and is also
-   referenced through `reviewKey`.
+   Return `resultKey`; return `previewKey` and `qaKey` for objects that exist
+   (`qaKey` is the review artifact; the 2026-10-19 spec names it). `htmlKey` stays
+   in the full direct result but is not part of the compact Bedrock result. Do not
+   return `layersKey`, and create no files merely to match the example paths. QA is
+   embedded in `result.json` as `qa` and is also referenced through `qaKey`.
 2. **Two response modes.** Bedrock actions get compact references and hashes. The
    authenticated direct call gets the complete result. The backend therefore needs
    no S3 access. Ownership checks stay mandatory in both.
@@ -106,6 +107,31 @@ SPEC 7.5's `final/` key paths are illustrative. Decisions:
    results, the reviewed render's identifier (`renderKey`, `renderSha256`),
    `htmlHash` and `assetManifestHash`. Approval needs passing checks and zero
    blocking issues; a check that did not run is reported `missing` and blocks.
+
+### designFreedom and the concept loop (SPEC 2.7, ANALYZE_REFERENCE, REVIEW_CONCEPT)
+
+Pipeline: `PREFLIGHT -> PREPARE_COPY -> ANALYZE_REFERENCE -> CONCEPT ->
+REVIEW_CONCEPT -> EXTRACT_SCENE -> ... -> REVIEW -> FINALIZE`.
+
+- `designFreedom` is an integer 0..100, default 0, part of the canonical request
+  hash. The job stores `designFreedom` and `policyVersion` (`"1.0"`).
+- ANALYZE_REFERENCE writes `policy.json` and `reference-analysis.json` once.
+- REVIEW_CONCEPT writes `concept-review.json` per attempt. The backend computes
+  approval. An unresolvable conflict raises `REFERENCE_CONSTRAINT_CONFLICT`
+  immediately; otherwise an unapproved concept consumes one of `MAX_CONCEPT_ROUNDS`
+  (2) and `CONCEPT` runs again at the next attempt, with targeted repair text. The
+  budget (`conceptRounds`) is separate from `correctionRounds`. When it is spent
+  the job ends with `REFERENCE_ADHERENCE_FAILED`.
+- **Frozen concept.** An approved concept is recorded on the job as
+  `approvedConcept {key, sha256, attempt, reviewKey, designFreedom, policyVersion}`.
+  EXTRACT_SCENE, both separation branches and REVIEW read it, never the latest
+  `CONCEPT` artifact, so both branches edit the same bytes after a regeneration.
+  A later attempt supersedes it, which invalidates scene, assets, render and QA.
+- REVIEW reports `conceptDefect` when its blockers come from the approved concept
+  itself. It is honoured only while a concept round remains; otherwise the
+  ordinary HTML correction runs.
+- `result.json` and `qa` carry `designFreedom`, `policyVersion`, `conceptRounds`
+  and the concept review (`key`, `passed`, `mode`, `documentedExceptions`).
 
 ## 4. Error shape
 

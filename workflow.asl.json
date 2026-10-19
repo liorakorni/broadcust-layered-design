@@ -68,6 +68,42 @@
           "Next": "RecordFailure"
         }
       ],
+      "Next": "AnalyzeReference"
+    },
+    "AnalyzeReference": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Vision over the real reference pixels; persists policy.json and reference-analysis.json. Runs once: the policy depends only on the request.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "ANALYZE_REFERENCE",
+        "attempt": 1,
+        "assetId": null
+      },
+      "ResultPath": "$.referenceAnalysis",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout",
+            "ProviderRateLimited",
+            "InvalidModelJson",
+            "ReferenceFetchFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
       "Next": "Concept"
     },
     "Concept": {
@@ -76,8 +112,8 @@
       "Parameters": {
         "jobId.$": "$.jobId",
         "stage": "CONCEPT",
-        "attempt": 1,
-        "assetId": null
+        "assetId": null,
+        "attempt.$": "$.attempt"
       },
       "ResultPath": "$.concept",
       "Comment": "Paid image generation. ProviderOutcomeUnknown is deliberately NOT retried - a retry is exactly what would pay twice.",
@@ -100,7 +136,87 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "ExtractScene"
+      "Next": "ReviewConcept"
+    },
+    "ReviewConcept": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Compares reference and concept against the derived policy before any paid separation work. Approval is computed by the backend; an approved concept is frozen on the job.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW_CONCEPT",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.conceptReview",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout",
+            "ProviderRateLimited",
+            "InvalidModelJson",
+            "ReferenceFetchFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ConceptApproved"
+    },
+    "ConceptApproved": {
+      "Type": "Choice",
+      "Comment": "Anything not approved goes to CorrectConcept, which raises ReferenceAdherenceFailed when no round is left. It must not go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever.",
+      "Choices": [
+        {
+          "Variable": "$.conceptReview.artifacts.approved",
+          "BooleanEquals": true,
+          "Next": "ExtractScene"
+        }
+      ],
+      "Default": "CorrectConcept"
+    },
+    "CorrectConcept": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Consumes one bounded concept round (separate from the HTML correction rounds). The counter is bounded per job in DynamoDB, not per task retry.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW_CONCEPT",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "CORRECT_CONCEPT"
+      },
+      "ResultPath": "$.conceptCorrection",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "NextConceptAttempt"
+    },
+    "NextConceptAttempt": {
+      "Type": "Pass",
+      "Comment": "Advances the attempt counter and drops stale per-attempt state. The concept is regenerated, so scene, assets, render and QA from the previous attempt are invalidated.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "attempt.$": "$.conceptCorrection.artifacts.nextAttempt"
+      },
+      "Next": "Concept"
     },
     "ExtractScene": {
       "Type": "Task",
@@ -376,12 +492,17 @@
     },
     "ReviewPassed": {
       "Type": "Choice",
-      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it. Anything not approved goes to Correct, which raises CorrectionExhausted when no round is left. It must not go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever.",
+      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it. Anything not approved goes to Correct, which raises CorrectionExhausted when no round is left. It must not go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever. A review that traces its blockers to the approved concept itself (conceptDefect, only reported while a concept round remains) goes to CorrectConcept instead, which regenerates the concept and so invalidates every downstream output.",
       "Choices": [
         {
           "Variable": "$.review.artifacts.approved",
           "BooleanEquals": true,
           "Next": "Finalize"
+        },
+        {
+          "Variable": "$.review.artifacts.conceptDefect",
+          "BooleanEquals": true,
+          "Next": "CorrectConcept"
         }
       ],
       "Default": "Correct"

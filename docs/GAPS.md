@@ -260,3 +260,35 @@ Three limits:
 
 **To close.** If saved designs need stronger durability, copy them to dedicated
 storage at FINALIZE and drop the tags.
+
+---
+
+## 11. The service is Python; the spec says Node.js 24 ES modules
+
+**State.** SPEC section 3 and the file list in section 8 specify Node.js 24 ES
+modules and `.mjs` files such as `prototype.mjs`, `pipeline.mjs` and
+`reference-policy.mjs`. The service is Python on a container-image Lambda. The
+requester was asked and chose to keep Python; the filenames are treated as
+illustrative (`lib/reference_policy.py` implements `deriveReferencePolicy`).
+
+**To close.** Only if the requester later requires the Node runtime, which would be
+a rewrite rather than a change.
+
+---
+
+## 12. Phase A and Phase B acceptance gates have not been produced
+
+**State.** The 2026-10-19 spec (section 0) makes a local prototype and its evidence
+the first deliverable: `node prototype.mjs`, a labelled reference/concept/HTML
+comparison, a human visual review, verification inside the real Broadcust editor,
+and at least three materially different brief/reference pairs at `designFreedom`
+0, 50 and 100 (plus 25 and 75 on one). The production pipeline was built and
+deployed first, so none of that evidence exists.
+
+What does exist: unit tests, an opt-in live integration test per band
+(`tests/test_integration.py`) and live runs of the deployed workflow.
+
+**To close.** Run the three-pair matrix against the deployed service, record
+policy evidence and a human review per case, and run the editor import. Mark the
+editor gate pending until it has been executed; do not claim it was tested.
+

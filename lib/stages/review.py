@@ -1,8 +1,8 @@
 """REVIEW, CORRECT and FINALIZE.
 
-REVIEW judges the real rendered pixels against the concept, at both native size
-and feed size. The concept is a guide, not a target: a different but
-well-executed composition passes. Only genuine defects block.
+REVIEW judges the real rendered pixels against the APPROVED concept, at both
+native size and feed size, whatever the designFreedom. The reference-policy review
+of that concept is loaded as settled evidence rather than re-litigated here.
 
 Mechanical render problems from RENDER are merged into the verdict rather than
 replacing it, because the two find different things. The renderer knows a text
@@ -22,7 +22,7 @@ from lib.providers import vision
 REVIEW_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["passed", "blockingIssues", "suggestions"],
+    "required": ["passed", "blockingIssues", "suggestions", "conceptDefect"],
     "properties": {
         "passed": {"type": "boolean"},
         "blockingIssues": {
@@ -42,6 +42,7 @@ REVIEW_SCHEMA = {
             },
         },
         "suggestions": {"type": "array", "items": {"type": "string"}},
+        "conceptDefect": {"type": "boolean"},
     },
 }
 
@@ -91,11 +92,18 @@ def run(job_id, attempt, asset_id=None):
 
     produced = job["artifacts"]
     copy_items = artifacts.get_json(job_id, produced[Stage.PREPARE_COPY]["copy"])["items"]
-    concept = artifacts.get_bytes(job_id, produced[Stage.CONCEPT]["concept"])
+    concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
     native = artifacts.get_bytes(job_id, produced[Stage.RENDER]["native"])
     feed = artifacts.get_bytes(job_id, produced[Stage.RENDER]["feed"])
 
-    prompt = prompts.render("review", copy_block=prompts.copy_block(copy_items))
+    approved_concept = jobs.approved_concept(job)
+    concept_review = artifacts.get_json(job_id, approved_concept["reviewKey"])
+
+    prompt = prompts.render(
+        "review",
+        copy_block=prompts.copy_block(copy_items),
+        concept_review_block=_concept_review_block(concept_review),
+    )
     raw = vision.analyze(
         prompt,
         (concept, native, feed),
@@ -122,8 +130,9 @@ def run(job_id, attempt, asset_id=None):
                 }
             )
 
+    approved = verdict.passed and not issues
     result = {
-        "approved": verdict.passed and not issues,
+        "approved": approved,
         "blockingIssues": issues,
         "suggestions": list(verdict.suggestions),
         "renderChecks": render_checks,
@@ -137,11 +146,31 @@ def run(job_id, attempt, asset_id=None):
         "correctionAvailable": (
             int(job.get("correctionRounds", 0)) < conf.MAX_CORRECTION_ROUNDS
         ),
+        # Routes to CorrectConcept. Only reported while a concept round is left:
+        # otherwise CorrectConcept would end the job with REFERENCE_ADHERENCE_FAILED
+        # when an ordinary HTML correction might still have fixed it.
+        "conceptDefect": bool(
+            not approved
+            and verdict.conceptDefect
+            and int(job.get("conceptRounds", 0)) < conf.MAX_CONCEPT_ROUNDS
+        ),
+        "conceptReviewKey": approved_concept["reviewKey"],
     }
     key = artifacts.artifact_key(job_id, Stage.REVIEW, attempt, "review.json")
     stored = artifacts.put_json(key, result)
     jobs.record_artifacts(job_id, Stage.REVIEW, attempt, {"review": stored["key"]})
     return {**result, "review": stored["key"]}
+
+
+def _concept_review_block(concept_review):
+    """Summarise the settled reference-policy review for the final reviewer."""
+    lines = [
+        f"- mode: {concept_review['mode']} (designFreedom {concept_review['designFreedom']})",
+        f"- passed: {concept_review['approved']}",
+        "- documented exceptions:",
+        prompts.bullet_list(concept_review.get("documentedExceptions", [])),
+    ]
+    return "\n".join(lines)
 
 
 def _render_problems(produced):
@@ -240,8 +269,19 @@ def finalize(job_id, attempt, asset_id=None):
 
     # The QA record is built here rather than in REVIEW because assetManifestHash
     # is final only now: it includes the published preview.
+    approved_concept = jobs.approved_concept(job)
+    concept_review = artifacts.get_json(job_id, approved_concept["reviewKey"])
     qa = {
         "passed": review["approved"],
+        "designFreedom": int(job["designFreedom"]),
+        "policyVersion": job["policyVersion"],
+        "conceptRounds": int(job.get("conceptRounds", 0)),
+        "conceptReview": {
+            "key": approved_concept["reviewKey"],
+            "passed": concept_review["approved"],
+            "mode": concept_review["mode"],
+            "documentedExceptions": concept_review["documentedExceptions"],
+        },
         "blockingIssues": review["blockingIssues"],
         "suggestions": review["suggestions"],
         "renderChecks": review["renderChecks"],
@@ -265,13 +305,15 @@ def finalize(job_id, attempt, asset_id=None):
         # `preview` predates `previewUrl` and is kept for existing callers.
         "preview": preview["url"],
         "canvas": scene["canvas"],
+        "designFreedom": int(job["designFreedom"]),
+        "policyVersion": job["policyVersion"],
         # References to objects the pipeline already stores. Compact transports
         # return these instead of the HTML itself.
         "resultKey": result_key,
         "htmlKey": html_key,
         "previewKey": produced[Stage.RENDER]["native"],
         "previewUrl": preview["url"],
-        "reviewKey": produced[Stage.REVIEW]["review"],
+        "qaKey": produced[Stage.REVIEW]["review"],
         "qa": qa,
     }
 
@@ -286,6 +328,8 @@ def finalize(job_id, attempt, asset_id=None):
             produced[Stage.ASSEMBLE]["scene"],
             produced[Stage.RENDER]["native"],
             produced[Stage.REVIEW]["review"],
+            approved_concept["reviewKey"],
+            produced[Stage.ANALYZE_REFERENCE]["policy"],
             job["requestKey"],
             stored["key"],
             *[entry["key"] for entry in manifest],

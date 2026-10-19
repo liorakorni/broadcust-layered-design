@@ -39,7 +39,9 @@ def through(pipeline, last):
     order = [
         Stage.PREFLIGHT,
         Stage.PREPARE_COPY,
+        Stage.ANALYZE_REFERENCE,
         Stage.CONCEPT,
+        Stage.REVIEW_CONCEPT,
         Stage.EXTRACT_SCENE,
         Stage.CLEAN_PHOTO,
         Stage.DECORATION_OVERLAY,
@@ -181,7 +183,7 @@ def test_background_with_unreconstructed_gaps_is_rejected(pipeline, monkeypatch)
 
 
 def test_scene_referencing_unknown_copy_is_rejected(pipeline, monkeypatch):
-    through(pipeline, Stage.CONCEPT)
+    through(pipeline, Stage.REVIEW_CONCEPT)
 
     real = vision_provider.analyze
 
@@ -198,7 +200,7 @@ def test_scene_referencing_unknown_copy_is_rejected(pipeline, monkeypatch):
 
 
 def test_scene_paraphrasing_approved_copy_is_rejected(pipeline, monkeypatch):
-    through(pipeline, Stage.CONCEPT)
+    through(pipeline, Stage.REVIEW_CONCEPT)
 
     real = vision_provider.analyze
 
@@ -214,7 +216,7 @@ def test_scene_paraphrasing_approved_copy_is_rejected(pipeline, monkeypatch):
 
 
 def test_scene_outside_the_canvas_is_rejected(pipeline, monkeypatch):
-    through(pipeline, Stage.CONCEPT)
+    through(pipeline, Stage.REVIEW_CONCEPT)
 
     real = vision_provider.analyze
 
@@ -233,7 +235,7 @@ def test_scene_outside_the_canvas_is_rejected(pipeline, monkeypatch):
 def test_scene_using_an_uninstalled_font_is_rejected(pipeline, monkeypatch):
     """Chromium substitutes silently, so an unapproved font would render in the
     wrong typeface rather than fail."""
-    through(pipeline, Stage.CONCEPT)
+    through(pipeline, Stage.REVIEW_CONCEPT)
 
     real = vision_provider.analyze
 

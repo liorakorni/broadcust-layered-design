@@ -187,12 +187,52 @@ SCENE = {
 }
 
 
+REFERENCE_ANALYSIS = {
+    "anchors": [
+        {"id": "hero", "kind": "dominantImage",
+         "box": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 0.7},
+         "relativeScale": 0.7, "confidence": 0.9},
+        {"id": "panel", "kind": "graphicPanel",
+         "box": {"x": 0.05, "y": 0.6, "width": 0.9, "height": 0.35},
+         "relativeScale": 0.3, "confidence": 0.8},
+    ],
+    "hierarchy": ["headline", "details"],
+    "overlaps": ["panel over hero"],
+    "alignment": "centered",
+    "readingFlow": "top to bottom",
+    "palette": ["#0b3d5c"],
+    "visualQualities": ["warm light"],
+    "notes": "",
+}
+
+
+def concept_verdict(prompt=None, *, passed=True, issues=(), conflict=None,
+                    mode="strict-adherence", checks=()):
+    """A well-formed concept_review_v1 payload."""
+    return {
+        "passed": passed,
+        "mode": mode,
+        "checks": list(checks),
+        "documentedExceptions": ["business name replaced"],
+        "blockingIssues": list(issues),
+        "suggestions": [],
+        "constraintConflict": {"conflicted": bool(conflict), "reason": conflict},
+    }
+
+
+def layout_issue(message="Hero image moved to the left."):
+    return {"code": "ANCHOR_DISPLACED", "category": "layoutAdherence",
+            "message": message}
+
+
 @pytest.fixture
 def pipeline(monkeypatch):
     """Wire every external dependency to a deterministic fake."""
     table = FakeTable()
     s3 = FakeS3()
     calls = {"image": [], "vision": [], "published": []}
+    # Scripted concept-review verdicts, consumed in order. Empty means approve.
+    concept_verdicts = []
 
     monkeypatch.setattr(jobs, "_tbl", lambda: table)
     monkeypatch.setattr(artifacts, "_client", lambda: s3)
@@ -233,8 +273,17 @@ def pipeline(monkeypatch):
         if schema_name == "overlay_inspection_v1":
             return {"photographicLeftovers": False, "textLeftovers": False,
                     "artworkPresent": True, "notes": "", "leftoverDescription": ""}
+        if schema_name == "composite_fidelity_v1":
+            return {"displaced": False, "description": ""}
+        if schema_name == "reference_analysis_v1":
+            return json.loads(json.dumps(REFERENCE_ANALYSIS))
+        if schema_name == "concept_review_v1":
+            if concept_verdicts:
+                return concept_verdicts.pop(0)
+            return concept_verdict(prompt)
         if schema_name == "review_v1":
-            return {"passed": True, "blockingIssues": [], "suggestions": []}
+            return {"passed": True, "blockingIssues": [], "suggestions": [],
+                    "conceptDefect": False}
         raise AssertionError(f"unexpected schema {schema_name}")
 
     monkeypatch.setattr(vision_provider, "analyze", fake_analyze)
@@ -267,7 +316,8 @@ def pipeline(monkeypatch):
     jobs.create_job(job_id, "owner-1", "hash-1", request_key, CANVAS)
     table.items[f"JOB#{job_id}"]["artifacts"] = {}
 
-    return {"jobId": job_id, "table": table, "s3": s3, "calls": calls}
+    return {"jobId": job_id, "table": table, "s3": s3, "calls": calls,
+            "concept_verdicts": concept_verdicts}
 
 
 def run_stage(job_id, stage, attempt=1, asset_id=None):
@@ -280,7 +330,9 @@ def run_pipeline(pipeline):
     for stage in (
         Stage.PREFLIGHT,
         Stage.PREPARE_COPY,
+        Stage.ANALYZE_REFERENCE,
         Stage.CONCEPT,
+        Stage.REVIEW_CONCEPT,
         Stage.EXTRACT_SCENE,
         Stage.CLEAN_PHOTO,
         Stage.DECORATION_OVERLAY,
@@ -444,7 +496,9 @@ def _stages_up_to_review(pipeline):
     for stage in (
         Stage.PREFLIGHT,
         Stage.PREPARE_COPY,
+        Stage.ANALYZE_REFERENCE,
         Stage.CONCEPT,
+        Stage.REVIEW_CONCEPT,
         Stage.EXTRACT_SCENE,
         Stage.CLEAN_PHOTO,
         Stage.DECORATION_OVERLAY,
@@ -460,7 +514,7 @@ def test_result_references_real_objects(pipeline):
     job = run_pipeline(pipeline)
     result = artifacts.get_json(pipeline["jobId"], job["resultKey"])
     assert result["resultKey"] == job["resultKey"]
-    for field in ("resultKey", "htmlKey", "previewKey", "reviewKey"):
+    for field in ("resultKey", "htmlKey", "previewKey", "qaKey"):
         assert result[field] in pipeline["s3"].objects, field
     assert result["previewUrl"] == result["preview"]
     assert result["previewUrl"].startswith("https://")

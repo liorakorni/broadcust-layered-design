@@ -22,7 +22,9 @@ class Stage:
     ACCEPT_REQUEST = "ACCEPT_REQUEST"
     PREFLIGHT = "PREFLIGHT"
     PREPARE_COPY = "PREPARE_COPY"
+    ANALYZE_REFERENCE = "ANALYZE_REFERENCE"
     CONCEPT = "CONCEPT"
+    REVIEW_CONCEPT = "REVIEW_CONCEPT"
     EXTRACT_SCENE = "EXTRACT_SCENE"
     CLEAN_PHOTO = "CLEAN_PHOTO"
     DECORATION_OVERLAY = "DECORATION_OVERLAY"
@@ -38,7 +40,9 @@ class Stage:
     PIPELINE = (
         PREFLIGHT,
         PREPARE_COPY,
+        ANALYZE_REFERENCE,
         CONCEPT,
+        REVIEW_CONCEPT,
         EXTRACT_SCENE,
         CLEAN_PHOTO,
         DECORATION_OVERLAY,
@@ -94,6 +98,8 @@ class Code:
     INVALID_TRANSPARENCY = "INVALID_TRANSPARENCY"
     ASSET_INVALID = "ASSET_INVALID"
     REFERENCE_FETCH_FAILED = "REFERENCE_FETCH_FAILED"
+    REFERENCE_ADHERENCE_FAILED = "REFERENCE_ADHERENCE_FAILED"
+    REFERENCE_CONSTRAINT_CONFLICT = "REFERENCE_CONSTRAINT_CONFLICT"
 
     # Assembly and delivery
     ASSEMBLY_FAILED = "ASSEMBLY_FAILED"
@@ -307,6 +313,27 @@ class ReviewBlocked(LayeredDesignError):
 class CorrectionExhausted(LayeredDesignError):
     stage = Stage.REVIEW
     code = Code.CORRECTION_EXHAUSTED
+
+
+class ReferenceAdherenceFailed(LayeredDesignError):
+    """The concept still violates the reference policy after the bounded
+    concept-repair rounds (SPEC section REVIEW_CONCEPT)."""
+
+    stage = Stage.REVIEW_CONCEPT
+    code = Code.REFERENCE_ADHERENCE_FAILED
+    retryable = False
+
+
+class ReferenceConstraintConflict(LayeredDesignError):
+    """Mandatory content cannot coexist with the strict reference layout.
+
+    Terminal: the service never silently redesigns, drops content or raises
+    designFreedom to resolve it (SPEC section 2.7).
+    """
+
+    stage = Stage.REVIEW_CONCEPT
+    code = Code.REFERENCE_CONSTRAINT_CONFLICT
+    retryable = False
 
 
 class MediaDeliveryUnavailable(LayeredDesignError):

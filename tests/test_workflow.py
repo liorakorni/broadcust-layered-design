@@ -61,7 +61,7 @@ def test_every_task_invokes_the_stage_function():
             assert state["Resource"] == "${StageFunctionArn}", name
 
 
-def test_all_twelve_pipeline_stages_are_wired():
+def test_all_fourteen_pipeline_stages_are_wired():
     # A Map declares the stage in its item selector rather than on the inner
     # Task, so look at every state that names one.
     used = {
@@ -140,7 +140,7 @@ def test_correction_advances_the_attempt_counter():
 
 
 def test_stages_rerun_by_the_correction_loop_use_the_live_attempt():
-    rerun = ("ExtractScene", "IndependentAssets", "ValidateAssets", "Assemble",
+    rerun = ("Concept", "ReviewConcept", "ExtractScene", "IndependentAssets", "ValidateAssets", "Assemble",
              "Render", "Review", "Finalize")
     for name in rerun:
         params = STATES[name]["Parameters"]
@@ -150,9 +150,10 @@ def test_stages_rerun_by_the_correction_loop_use_the_live_attempt():
 
 
 def test_stages_before_the_loop_stay_on_attempt_one():
-    """Preflight, copy and the concept are never repeated: the concept in
-    particular must stay byte-identical for separation to align."""
-    for name in ("Preflight", "PrepareCopy", "Concept"):
+    """Preflight, copy and reference analysis are never repeated. The concept now
+    can be (a concept repair round); what keeps separation aligned is the approved
+    concept frozen on the job, not the concept running only once."""
+    for name in ("Preflight", "PrepareCopy", "AnalyzeReference"):
         assert STATES[name]["Parameters"]["attempt"] == 1
 
 
@@ -168,7 +169,7 @@ def test_unapproved_review_always_reaches_correct():
     Catch is what supplies $.failure. Skipping it is what stranded a live job."""
     choice = STATES["ReviewPassed"]
     assert choice["Default"] == "Correct"
-    assert [c["Next"] for c in choice["Choices"]] == ["Finalize"]
+    assert [c["Next"] for c in choice["Choices"]] == ["Finalize", "CorrectConcept"]
     assert STATES["Correct"]["Catch"][0]["Next"] == "RecordFailure"
 
 
@@ -186,6 +187,46 @@ def test_record_failure_is_only_reached_through_a_catch():
         for catch in state.get("Catch", []):
             if catch["Next"] == "RecordFailure":
                 assert catch["ResultPath"] == "$.failure", name
+
+
+def test_review_routes_a_concept_defect_to_concept_repair_after_approval():
+    choices = STATES["ReviewPassed"]["Choices"]
+    assert choices[1]["Variable"] == "$.review.artifacts.conceptDefect"
+    assert choices[1]["BooleanEquals"] is True
+    assert choices[1]["Next"] == "CorrectConcept"
+
+
+def test_new_stages_sit_at_their_spec_positions():
+    pipeline = list(Stage.PIPELINE)
+    assert pipeline.index("ANALYZE_REFERENCE") == pipeline.index("PREPARE_COPY") + 1
+    assert pipeline.index("CONCEPT") == pipeline.index("ANALYZE_REFERENCE") + 1
+    assert pipeline.index("REVIEW_CONCEPT") == pipeline.index("CONCEPT") + 1
+    assert pipeline.index("EXTRACT_SCENE") == pipeline.index("REVIEW_CONCEPT") + 1
+    assert STATES["PrepareCopy"]["Next"] == "AnalyzeReference"
+    assert STATES["AnalyzeReference"]["Next"] == "Concept"
+    assert STATES["Concept"]["Next"] == "ReviewConcept"
+    assert STATES["ReviewConcept"]["Next"] == "ConceptApproved"
+
+
+def test_unapproved_concept_always_reaches_correct_concept():
+    """ConceptApproved must not route to RecordFailure: CorrectConcept raises
+    ReferenceAdherenceFailed when no round is left and its Catch supplies
+    $.failure. A direct edge would strand the job as RUNNING."""
+    choice = STATES["ConceptApproved"]
+    assert choice["Default"] == "CorrectConcept"
+    assert [c["Next"] for c in choice["Choices"]] == ["ExtractScene"]
+    assert choice["Choices"][0]["Variable"] == "$.conceptReview.artifacts.approved"
+    assert STATES["CorrectConcept"]["Catch"][0]["Next"] == "RecordFailure"
+    assert STATES["CorrectConcept"]["Parameters"]["operation"] == "CORRECT_CONCEPT"
+
+
+def test_concept_repair_regenerates_the_concept_at_a_new_attempt():
+    assert STATES["CorrectConcept"]["Next"] == "NextConceptAttempt"
+    nxt = STATES["NextConceptAttempt"]
+    assert nxt["Next"] == "Concept"
+    assert nxt["Parameters"]["attempt.$"] == "$.conceptCorrection.artifacts.nextAttempt"
+    # Narrowed on purpose: drops the stale scene, assets, render and review.
+    assert set(nxt["Parameters"]) == {"jobId.$", "attempt.$"}
 
 
 def test_review_choice_requires_backend_approval_flag():

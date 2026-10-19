@@ -146,3 +146,63 @@ def test_stable_media_publishing_is_reachable():
 
     media.reset()
     assert media.check_available()
+
+
+@pytest.mark.parametrize("freedom", [0, 25, 50, 75, 100])
+def test_reference_analysis_and_concept_review_accept_the_real_model_output(
+    concept, freedom
+):
+    """The strict schemas and prompts for designFreedom against the real vision
+    model, with the same image as reference and concept.
+
+    It records policy evidence per setting rather than asserting any ordering:
+    SPEC section 9 forbids requiring random outputs to differ monotonically.
+    """
+    import json
+
+    from lib import prompts, reference_policy, schemas
+    from lib.stages import analyze_reference, review_concept
+
+    policy = reference_policy.derive_reference_policy(freedom)
+    raw = vision_provider.analyze(
+        prompts.render(
+            "analyze-reference",
+            width=1024,
+            height=1024,
+            mode=policy["mode"],
+            design_freedom=freedom,
+            policy_instruction=policy["instruction"],
+            must_preserve=prompts.bullet_list(policy["mustPreserve"]),
+            copy_block='- title.primary: "Winter in Tuscany"',
+        ),
+        (concept,),
+        schema=analyze_reference.REFERENCE_ANALYSIS_SCHEMA,
+        schema_name="reference_analysis_v1",
+        model=conf.REVIEW_MODEL,
+        operation_id=f"integration:analyze:{freedom}",
+    )
+    analysis = schemas.parse_reference_analysis(raw)
+    assert analysis.anchors
+
+    verdict_raw = vision_provider.analyze(
+        prompts.render(
+            "review-concept",
+            mode=policy["mode"],
+            design_freedom=freedom,
+            policy_instruction=policy["instruction"],
+            must_preserve=prompts.bullet_list(policy["mustPreserve"]),
+            may_change=prompts.bullet_list(policy["mayChange"]),
+            documented_exceptions=prompts.bullet_list(policy["documentedExceptions"]),
+            reference_anchors=json.dumps(
+                [a.model_dump(mode="json") for a in analysis.anchors]
+            ),
+            copy_block='- title.primary: "Winter in Tuscany"',
+        ),
+        (concept, concept),
+        schema=review_concept.CONCEPT_REVIEW_SCHEMA,
+        schema_name="concept_review_v1",
+        model=conf.REVIEW_MODEL,
+        operation_id=f"integration:review-concept:{freedom}",
+    )
+    verdict = schemas.parse_concept_review(verdict_raw)
+    print(freedom, policy["mode"], verdict.passed, len(verdict.blockingIssues))

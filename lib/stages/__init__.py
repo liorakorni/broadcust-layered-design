@@ -13,6 +13,7 @@ from lib.errors import Stage
 
 def build_registry():
     from lib.stages import (
+        analyze_reference,
         assemble,
         concept,
         extract_scene,
@@ -20,6 +21,7 @@ def build_registry():
         preflight,
         prepare_copy,
         review,
+        review_concept,
         separation,
         validate,
     )
@@ -27,7 +29,9 @@ def build_registry():
     return {
         Stage.PREFLIGHT: preflight.run,
         Stage.PREPARE_COPY: prepare_copy.run,
+        Stage.ANALYZE_REFERENCE: analyze_reference.run,
         Stage.CONCEPT: concept.run,
+        Stage.REVIEW_CONCEPT: review_concept.run,
         Stage.EXTRACT_SCENE: extract_scene.run,
         Stage.CLEAN_PHOTO: separation.clean_photo,
         Stage.DECORATION_OVERLAY: separation.decoration_overlay,

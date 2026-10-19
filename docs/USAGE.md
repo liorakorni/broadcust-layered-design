@@ -42,7 +42,8 @@ from the shape of the request.
     "canvas": { "width": 1024, "height": 1024 },
     "referenceImageUrl": "https://res.cloudinary.com/broadcust/image/upload/inspiration.jpg",
     "brand": { "colors": ["#0B2545"], "fontFamilies": ["Heebo"] },
-    "suppliedAssets": []
+    "suppliedAssets": [],
+    "designFreedom": 0
   }
 }
 ```
@@ -60,6 +61,7 @@ from the shape of the request.
 | `brand.colors` | no | `#RGB` or `#RRGGBB`. |
 | `brand.fontFamilies` | no | Must be installed in the renderer — currently `Heebo` and `Arial`. An unlisted font is rejected at PREFLIGHT rather than silently substituted. |
 | `suppliedAssets` | no | Up to 10 images you provide (`logo`, `photo`, `product`, `portrait`). These are used as-is and never regenerated. |
+| `designFreedom` | no | Integer 0-100: how far the design may depart from the reference. Default `0` (strictest). See below. |
 | `requestId` | **yes** | Your idempotency key. See below. |
 
 **`trustedCallerContext.ownerScope`** establishes who owns the job. It must come
@@ -68,9 +70,44 @@ caller could claim another tenant's jobs. Jobs are readable only by the scope
 that created them, and an unknown job and someone else's job are deliberately
 indistinguishable.
 
-**The inspiration image is inspiration, not a template.** Its depth, lighting and
-typographic feel are learned from; its layout is not copied. Supply real pixels on
-an authorized origin — a description of an image will not do.
+**The inspiration image is guidance, and you control how binding it is.** Supply
+real pixels on an authorized origin — a description of an image will not do. How
+closely the design follows the reference is set by `designFreedom`.
+
+### `designFreedom`
+
+A creative-control setting from 0 to 100. It is **not** a measured pixel
+difference or a similarity score, so a result is never "10% different". The
+service turns the number into written constraints that drive reference analysis,
+the concept prompt, the concept review and its repairs.
+
+| Value | Policy mode | What it means |
+|---|---|---|
+| 0 | `strict-adherence` | Reproduce the reference composition as closely as practical; no discretionary redesign. |
+| 1-25 | `close-adaptation` | Keep the recognizable layout and major anchors; adapt locally for copy, assets, brand and fit. |
+| 26-50 | `guided-adaptation` | Keep selected qualities and hierarchy; reorganize regions when the brief justifies it. |
+| 51-75 | `broad-inspiration` | Major structural change allowed; the reference is mostly an atmosphere reference. |
+| 76-100 | `free-composition` | A new structure is allowed. At 100 no source layout is preserved. |
+
+- **Omitted means 0.** An explicit `0` is the same request and hashes identically.
+- **Validation is strict.** An integer from 0 to 100 only. `null`, `"10"`, `10.5`,
+  `true`/`false`, `-1` and `101` are all `INVALID_REQUEST`.
+- **It is part of the request.** Reusing a `requestId` with a different value is
+  `IDEMPOTENCY_CONFLICT`. The service never changes the value during repairs, and
+  never raises it to get past a conflict.
+- **Facts always win.** At every setting the brief, required text, supplied
+  identity assets and brand take precedence. Replacing the reference's business
+  text and identities, applying your brand colours and substituting an available
+  font are documented exceptions, not violations.
+- **The HTML is faithful at every setting.** `designFreedom` governs reference to
+  concept. The final HTML must still reconstruct the approved concept faithfully
+  at 100.
+- **Pixel-identical output is not promised at 0.** If mandatory content cannot fit
+  a strict layout, the job fails with `REFERENCE_CONSTRAINT_CONFLICT` rather than
+  silently redesigning.
+
+The effective value and `policyVersion` come back in the result and in `qa`, with
+the concept review's mode and documented exceptions.
 
 ### Response
 
@@ -212,7 +249,7 @@ pixels from the top-left, its stacking order, and for text its `role` and
 same URL under its newer name; `preview` is kept for existing callers.
 
 **References to stored objects.** `resultKey`, `htmlKey`, `previewKey` and
-`reviewKey` are S3 keys in the artifact bucket for objects the service really
+`qaKey` are S3 keys in the artifact bucket for objects the service really
 stores: this result, the delivered HTML, the reviewed render (a PNG) and the
 review verdict. They are references, not a way to fetch the design — the bucket
 is private, and a caller without bucket access gets the same content from the
@@ -302,6 +339,8 @@ timeout is retryable; an unapproved font is not.
 | `INVALID_SCENE` | Layout geometry was out of bounds, or copy was altered. | Retryable. |
 | `INVALID_TRANSPARENCY` | The overlay came back opaque or with the photo baked in. | Repaired automatically up to twice, then terminal. |
 | `IMPOSSIBLE_CONTENT_REQUIREMENT` | The design needs more than 3 generated images. | Simplify the brief or supply the images. |
+| `REFERENCE_ADHERENCE_FAILED` | The concept still broke the `designFreedom` policy after 2 concept repair rounds. | Raise `designFreedom` deliberately, or adjust the brief or reference. The service never raises it for you. |
+| `REFERENCE_CONSTRAINT_CONFLICT` | Required content cannot fit the reference layout at this `designFreedom`. | Raise `designFreedom`, shorten the copy or choose another reference. |
 | `CORRECTION_EXHAUSTED` | Still had blocking defects after 2 correction rounds. | Adjust the brief. |
 | `PROVIDER_OUTCOME_UNKNOWN` | A paid generation timed out; we cannot tell whether it completed. | **Not retried automatically** — a retry is what would pay twice. |
 
@@ -422,10 +461,10 @@ agent turn; the backend keeps the `jobId` and reads the terminal status itself.
   "status": "SUCCEEDED",
   "result": {
     "resultKey": "layered-design/9f2c1a7b…/FINALIZE/1/result.json",
-    "htmlKey": "layered-design/9f2c1a7b…/ASSEMBLE/1/design.html",
     "previewKey": "layered-design/9f2c1a7b…/RENDER/1/native.png",
     "previewUrl": "https://res.cloudinary.com/…/preview.png",
-    "reviewKey": "layered-design/9f2c1a7b…/REVIEW/1/review.json",
+    "qaKey": "layered-design/9f2c1a7b…/REVIEW/1/review.json",
+    "designFreedom": 0,
     "htmlHash": "…",
     "assetManifestHash": "…"
   }

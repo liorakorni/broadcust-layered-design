@@ -1,10 +1,11 @@
-You are designing a NEW premium marketing composition.
+You are creating a premium marketing composition from a brief and a reference image.
 
-The inspiration image shows visual qualities worth learning from: its sense of
-depth, lighting, typographic hierarchy and atmosphere. It is NOT a template.
-Do not copy its section count, box positions or proportions, and do not force
-the new content into its layout. The brief, audience and brand below determine
-the composition.
+The inspiration image is the reference. How closely the new composition must
+follow it is set by the caller, and the policy below is binding. The brief,
+audience and brand determine the content; the policy determines how much of the
+reference's composition may change.
+
+{policy_block}
 
 CANVAS: {width}x{height} pixels.
 
@@ -12,6 +13,8 @@ BRIEF:
 {post}
 
 {instructions_block}
+
+{repair_block}
 
 APPROVED COPY (use these exact strings; do not add, translate or embellish):
 {copy_block}

@@ -1,0 +1,49 @@
+You are reviewing a generated marketing concept against its inspiration image
+BEFORE any further work is spent on it.
+
+Image 1: the inspiration (reference) image.
+Image 2: the generated concept.
+
+CREATIVE POLICY (designFreedom {design_freedom}, mode {mode}):
+{policy_instruction}
+
+The concept MUST preserve:
+{must_preserve}
+
+The concept MAY change:
+{may_change}
+
+Always-permitted adaptations. These are documented exceptions, never violations:
+{documented_exceptions}
+
+Reference anchors recorded earlier (normalized boxes, 0..1 from the top-left):
+{reference_anchors}
+
+APPROVED COPY (the only legitimate text; the reference's own text is not target
+content):
+{copy_block}
+
+How to review:
+- For every item under "must preserve", add one check naming the anchor it is
+  about (anchorId, or null when it concerns the whole layout), the feature, the
+  expected policy, what you observed in the concept, and whether it passed.
+  Compare normalized anchor positions and relative scale. Do NOT report a
+  similarity percentage.
+- Raise a blocking issue with category "layoutAdherence" only for a violation of
+  the policy above that is NOT one of the always-permitted adaptations.
+- Raise blocking issues with category "content", "readability" or "composition"
+  at EVERY setting for: invented facts, wrong or missing approved copy,
+  unreadable text, or a poor composition.
+- Do not raise an issue because the concept differs from the reference in a way
+  the policy says it may change.
+- List the always-permitted adaptations you actually saw under
+  documentedExceptions.
+- Each blocking issue message must be a targeted repair instruction that a
+  designer could act on, for example which element moved and where it belongs.
+- Set constraintConflict.conflicted to true ONLY if the mandatory content
+  genuinely cannot fit the preserved layout even with localized fitting, and
+  give a concise reason. Otherwise set it to false with a null reason.
+
+Return strict JSON: passed, mode (echo "{mode}"), checks, documentedExceptions,
+blockingIssues (each with code, category, message), suggestions and
+constraintConflict.

@@ -1,5 +1,66 @@
 # Cursor implementation instructions: standalone LayeredDesign service
 
+Updated: 2026-10-19. Complete standalone implementation specification.
+
+## 0. Implementation sequence and acceptance gates
+
+Build and validate the visual pipeline before implementing production orchestration. The AWS resources and Bedrock adapter below are required for the final delivery; they are not prerequisites for the first visual prototype. This section defines implementation order, not a reduction in final scope.
+
+### Phase A — Contracts and one complete visual prototype
+
+First implement request normalization, designFreedom policy, authoritative copy, scene/layer schemas, provider interfaces and the HTML/editor contract. Keep stage logic independent of Lambda event handling and storage implementation.
+
+Provide a local command:
+
+```bash
+node prototype.mjs --request examples/request.json --output artifacts/prototype
+```
+
+The local runner executes the same core stage functions later used by the stage Lambda. It may run synchronously and store artifacts locally. It does not implement or pretend to satisfy the asynchronous production start/status contract. Use real image-editing and vision providers for the acceptance run; mocks are limited to software tests.
+
+Run one actual brief/reference through concept creation and review, asset separation, HTML assembly, rendering and review. Start with the Italy winter travel example with designFreedom omitted; verify that it resolves to 0. Obtain or configure actual authorized reference pixels, provider credentials, fonts and editor styles; do not invent working integrations.
+
+Test separation as soon as the first concept passes review. Produce the clean photograph and aligned true-alpha decoration overlay from the SAME frozen concept. Before building orchestration, demonstrate that removing the overlay reveals a complete photo with no baked text-support panels, and that overlaying it restores the intended artwork without leaking photographic content or duplicated text.
+
+For local inspection only, relative asset paths served by a local static server or embedded assets are allowed. Mark the output as a prototype. This exception does not permit temporary local or expiring URLs in saved customer designs. Production finalization still requires stable media delivery.
+
+Required first-milestone artifacts:
+- Exact normalized request, reference, authoritative copy, derived policy and model/provider identities.
+- Approved concept and its review.
+- Separate photo, true-alpha decoration overlay and any independent assets.
+- Validated scene JSON, editable HTML and layer manifest.
+- Native-size and 360px-wide feed renders.
+- A labeled reference/concept/HTML comparison plus a separation demonstration.
+- Technical and visual QA, repair counts, measured stage durations and provider usage/cost where available; mark unavailable cost data as unknown.
+
+The first milestone passes only when the real output is visually convincing, faithfully reconstructs the approved concept and meets the technical checks. Model self-approval alone is insufficient evidence of design quality. Record a human visual review of the comparison and its specific findings. If quality fails, refine the responsible prompts, scene extraction or asset edits before proceeding.
+
+### Phase B — Actual editor verification and variation
+
+Import the prototype into the actual Broadcust editor or a verified integration harness that uses its real styles and layer behavior. A standalone browser preview alone does not prove editor compatibility. If editor access is unavailable, deliver a reproducible import/test package and mark this gate pending; do not claim the editor was tested.
+
+Verify that text can be edited, saved and reopened; decorations can be hidden/moved/replaced independently; the photo and independent images can be replaced without mutating other layers; and Hebrew/LTR contacts retain correct rendering. Geometry changes after deliberate customer edits are not automatically repaired by this creation service.
+
+Test at least three materially different brief/reference pairs, including a longer Hebrew brief and a composition with independent imagery. Initially run each at designFreedom=0, 50 and 100, then extend one common brief/reference to 25 and 75. Use distinct request IDs and preserve all evidence. Do not tune only to the travel example or require random outputs to differ monotonically.
+
+Evaluate two relationships independently:
+1. Reference to concept: obey the requested creative policy and documented exceptions.
+2. Approved concept to rendered HTML: preserve visual fidelity at every freedom level.
+
+Require readable text at native and feed sizes, accurate facts, genuine separation, coherent composition and absence of generic layout substitution that discards the approved concept. Record pass/fail reasons per case rather than inventing a numeric similarity threshold. One successful hand-crafted example is not proof of repeatable automation.
+
+### Phase C — Production service and required Bedrock integration
+
+After the visual and editor gates pass, wrap the proven core stages in the two-Lambda architecture, Step Functions, DynamoDB and S3 described below. Add durable acceptance, ownership, idempotency, deadlines, bounded recovery, stable asset publishing and status retrieval. Add the required Bedrock Action Group adapter and direct backend retrieval path.
+
+Reuse the validated providers, prompts, schemas and assembler; do not replace them with a second independently implemented pipeline. Production configuration may use different storage adapters, but must preserve the same rendering and validation behavior.
+
+### Phase D — Deployment acceptance and handoff
+
+Run the production-shaped end-to-end, failure, authorization, idempotency, durability and Bedrock/direct-result tests in section 9 in an authorized test environment. Measure latency and provider usage, distinguish estimates from actual charges, and document unresolved dependencies. Do not claim deployment or provider validation without execution evidence.
+
+The first deliverable is the Phase A prototype and its evidence. The final deliverable includes all production requirements below. Work may proceed through passing gates within the authorized scope; a failing gate requires correction, not a silent waiver. No automatic production deployment is authorized by this specification.
+
 ## 1. Purpose and responsibility
 
 Implement an AWS service named `LayeredDesign` that receives a marketing brief, an inspiration image, canvas dimensions, optional branding and supplied assets. It produces a polished marketing design as editable HTML with independently replaceable visual layers.
@@ -8,7 +69,7 @@ This is a standalone specification. The implementation must not depend on previo
 
 The service owns the complete process: visual concept creation, concept analysis, image separation, editable text placement, deterministic HTML assembly, browser rendering, visual review and bounded correction.
 
-The inspiration image guides visual quality, hierarchy, atmosphere, depth and typography. It is not a locked template. The supplied brief, audience and brand determine the new composition. Do not force target content into the source image's boxes, section count or proportions.
+The inspiration image guides visual quality, hierarchy, atmosphere, depth and typography. The caller controls permitted departure from that image using designFreedom (0..100). At 0, preserve its composition and visual system as closely as content, branding and technical constraints allow; at 100, permit complete recomposition. The brief remains the factual source of truth at every setting. See section 2.7 for the binding policy.
 
 Reference discovery is outside this service: the caller supplies the inspiration image. Publishing to social networks and providing a customer-facing editor are also outside scope.
 
@@ -49,6 +110,7 @@ Job creation returns immediately after durable acceptance and workflow-start ack
   },
   "canvas": { "width": 1080, "height": 1080 },
   "referenceImageUrl": "https://example.com/inspiration.png",
+  "designFreedom": 0,
   "brand": {
     "colors": ["#071B33", "#D4AF37"],
     "fontFamilies": ["Heebo"]
@@ -63,7 +125,8 @@ Example URLs demonstrate structure only. Integration tests must use real authori
 
 Validation:
 - Require requestId, brief.post and referenceImageUrl.
-- Default schemaVersion to "1.0" and canvas to 1080x1080.
+- Default schemaVersion to "1.0", canvas to 1080x1080 and designFreedom to 0.
+- designFreedom must be an integer from 0 through 100. Reject strings, null, fractional values and out-of-range values; apply the default only when omitted. Preserve an explicit 0. Default only when the field is absent, then validate the supplied value; null must be rejected rather than defaulted.
 - Support integer canvas dimensions 256..2048 initially.
 - brief.post: 1..12000 characters. Overall request: at most 64 KiB.
 - Business details, instructions, requiredTexts, brand and suppliedAssets are optional.
@@ -127,6 +190,7 @@ Allowed statuses: QUEUED, RUNNING, SUCCEEDED, FAILED. Report actual stage names 
   "jobId": "generated-job-id",
   "status": "SUCCEEDED",
   "result": {
+    "designFreedom": 0,
     "html": "<div class=\"image container\">...</div>",
     "htmlUrl": "https://media.example.com/design.html",
     "previewUrl": "https://media.example.com/preview.png",
@@ -163,7 +227,9 @@ All geometry in this document is illustrative, not a fixed layout. Include every
 
 The HTML, preview, layer map and QA must represent exactly the same final version. Persisted HTML must use stable, immutable/versioned image URLs, not one-hour presigned image links. Protected download links to the HTML or preview may expire if authorized links can be refreshed; embedded image URLs must remain usable in the intended editor/rendering context.
 
-The authenticated application status interface may return the full result above. Compact transports such as Bedrock action responses return pointers instead of full HTML; the application fetches the full result through the authenticated service. Store full content in S3, not DynamoDB.
+The authenticated direct application status interface returns the full result above after authorization. Compact Bedrock action responses return only real artifact pointers and hashes. The application retrieves the full result by calling the service directly; direct S3 access for the application is not required. Store full content in S3, not DynamoDB. htmlUrl is optional if no separate HTML object is produced; do not fabricate it. A combined result.json containing HTML, layers, assets, designFreedom and validation is sufficient. No mandatory final/ directory or duplicate split files are required.
+
+Artifact key fields contain S3 keys only. A Cloudinary preview URL belongs in previewUrl, never previewKey. Omit fields for nonexistent artifacts. Persist render identity, actual technical check outcomes, issues/suggestions, htmlHash and assetManifestHash in the result or an actual review artifact. Missing checks cannot count as passing.
 
 ### 2.6 Failed job
 
@@ -183,9 +249,60 @@ The authenticated application status interface may return the full result above.
 
 success:true means the status lookup succeeded; the design job itself failed. Unknown or unauthorized jobs return success:false without exposing other callers' jobs.
 
+### 2.7 Design freedom: caller-controlled reference adherence
+
+`designFreedom` is a creative-control setting, not a measured pixel-difference percentage, similarity score, image-model API parameter or probability. Do not label the result as mathematically "10% different". The implementation translates the number into explicit constraints applied to reference analysis, concept prompts, review and corrections.
+
+| Value/range | Policy mode | Required behavior |
+|---|---|---|
+| 0 | strict-adherence | Preserve reference composition, dominant image placement/scale, graphic-panel geometry, overlaps, typography hierarchy and reading flow as closely as practical. No discretionary redesign. |
+| 1..25 | close-adaptation | Keep the recognizable layout and major anchors. Allow localized adjustments for target copy, supplied assets, brand and fit. |
+| 26..50 | guided-adaptation | Preserve selected visual qualities and hierarchy. Reorganize individual regions and proportions when justified by the brief. At 50, meaningful restructuring is allowed. |
+| 51..75 | broad-inspiration | Allow major structural changes while adapting selected visual qualities. At 75, the source may be primarily an atmosphere/style reference. |
+| 76..100 | free-composition | Allow a new structure, hierarchy, placements and proportions. At 100, no source-layout preservation is mandatory. Factual, brand, quality and editability constraints still apply. |
+
+Default: 0, the lowest available design freedom and strictest reference-adherence policy. Higher freedom requires an explicit caller value. Persist the effective value and policyVersion (initially "1.0") with the job, derived policy, concept evidence and final result. Changing designFreedom changes the canonical request hash; the same requestId with a different value produces IDEMPOTENCY_CONFLICT. An omitted value and explicit 0 should normalize to the same effective request. Do not silently change the value during repairs.
+
+Policy precedence at every level:
+1. Factual accuracy, required text, supplied identity assets, explicit caller brand/instructions and technical editability constraints.
+2. The reference-preservation policy selected by designFreedom.
+3. Optional aesthetic improvements.
+
+At 0, replace source business text, contacts, identities and irrelevant subjects with the target content. Supplied brand colors override source colors. Use approved available fonts with equivalent visual character if the exact font is unavailable. Preserve source text hierarchy/relative scale rather than its literal spelling, business claims or exact line breaks. A source logo must not be copied as the target logo. If a different aspect ratio is requested, map source anchors into the target canvas and document necessary adaptation.
+
+The service cannot guarantee pixel-identical reconstruction at 0. Generative editing, new copy, available fonts and HTML rendering can change pixels. If mandatory content cannot fit while preserving a strict layout, attempt localized fitting without unreadable text; if still incompatible, return REFERENCE_CONSTRAINT_CONFLICT with a concise reason. Do not silently redesign, omit mandatory content or increase designFreedom. Permitted factual/brand adaptations are documented exceptions, not violations.
+
+Implementation requirements:
+- Add pure `deriveReferencePolicy(designFreedom)` in reference-policy.mjs with explicit handling of 0 and the table boundaries.
+- Include mode, selected value, policyVersion, mustPreserve, mayChange and documentedExceptions in policy.json. The numeric control is qualitative; adjacent values may share a policy band. Do not imply calibrated continuous tolerances that have not been implemented.
+- Analyze the actual reference pixels to record major anchors: normalized boxes/relative scale for dominant imagery and graphic panels, approximate text zones and hierarchy, overlap relationships, alignment and reading flow. Record confidence; do not pretend to identify an exact font from pixels.
+- For strict/close modes, identify concrete composition constraints from those observations. For guided/broad modes, select useful features without locking all geometry. At 100, no geometric preservation is mandatory, but record how the reference was used if any.
+- Render a readable English policy instruction into the concept prompt. Passing only a number or a guessed provider flag does not implement the feature.
+- Persist policy evidence and use it for concept review and targeted repairs. A model's aesthetic preference cannot override a strict preservation constraint.
+
+Example instruction for designFreedom=10:
+
+> Preserve the reference composition, dominant image placement and relative scale, graphic-panel geometry, overlap relationships, typography hierarchy and reading flow. Adapt only what is necessary for the supplied target copy, assets and brand. Replace all source text, business identities and irrelevant subject matter. Avoid a new generic layout. Record necessary deviations.
+
+Example instruction for designFreedom=50:
+
+> Adapt selected reference visual qualities and hierarchy to the target brief. You may reorganize regions and proportions to improve content fit and visual impact. Explain the retained inspiration and deliberate structural changes.
+
+Example instruction for designFreedom=100:
+
+> Create the strongest composition for the target brief and brand. You may redesign all layout, scale, hierarchy and visual placement. The reference is optional inspiration, not a geometric constraint. Do not copy source identities or factual content.
+
+There are TWO separate review relationships:
+- Reference -> concept: adherence depends on designFreedom and approved exceptions.
+- Approved concept -> separated assets + final HTML: reconstruction must remain faithful at EVERY designFreedom value.
+
+A high designFreedom is never permission to simplify or drift from the approved target concept while building HTML. The HTML schema, transparency requirements and quality gates do not change with this setting.
+
 ## 3. AWS architecture
 
-Implement these resources:
+Implement these resources in Phase C after the visual and editor gates. During Phases A/B, run the same core stage functions locally with filesystem artifact storage:
+
+
 
 | Resource | Responsibility |
 |---|---|
@@ -209,9 +326,11 @@ Persist status, current stage, timestamps, request hash, owner scope, execution 
 
 Implement the following sequence:
 
-PREFLIGHT -> PREPARE_COPY -> CONCEPT -> EXTRACT_SCENE -> CLEAN_PHOTO -> DECORATION_OVERLAY -> INDEPENDENT_ASSETS -> VALIDATE_ASSETS -> ASSEMBLE -> RENDER -> REVIEW -> FINALIZE.
+PREFLIGHT -> PREPARE_COPY -> ANALYZE_REFERENCE -> CONCEPT -> REVIEW_CONCEPT -> EXTRACT_SCENE -> CLEAN_PHOTO -> DECORATION_OVERLAY -> INDEPENDENT_ASSETS -> VALIDATE_ASSETS -> ASSEMBLE -> RENDER -> REVIEW -> FINALIZE.
 
-Dispatch the stage Lambda using `{jobId, stage, attempt}`; independent asset tasks also receive assetId. A bounded Map may process at most three independent generated assets, with concurrency at most two.
+In production, dispatch the stage Lambda using `{jobId, stage, attempt}`; independent asset tasks also receive assetId. A bounded Map may process at most three independent generated assets, with concurrency at most two.
+
+The local runner and production dispatcher invoke shared core stage functions through injected provider, artifact-store and renderer interfaces. Keep business logic out of orchestration adapters.
 
 Each stage loads authorized inputs, performs its operation, validates its output, stores immutable output artifacts and returns small pointers. Persist output before advancing. Reuse completed work when input hashes match. No stub may return successful completion.
 
@@ -223,9 +342,19 @@ Validate request, authorized asset origins, configured image editing, true-alpha
 
 Create a concise authoritative copy manifest grounded in the brief, with stable content keys. Preserve requiredTexts and supplied factual details. Keep phone/email as distinct items. Generated concept text or OCR is never the source of truth. Do not add services, prices or claims to fill space.
 
+### ANALYZE_REFERENCE
+
+Send actual reference pixels, target brief/brand/copy, target canvas and effective designFreedom to vision. Record approximate source anchors, hierarchy, proportions, overlaps, palette and relevant visual qualities. Use deriveReferencePolicy to determine what is mandatory versus optional. Persist reference-analysis.json and policy.json, including justified content/brand/aspect/font exceptions. Validate structured output. These source observations guide concept creation; they do not replace analysis of the actual target concept later.
+
 ### CONCEPT
 
-Send actual inspiration pixels, brief, approved copy, brand, supplied assets and canvas to the image creation/edit model. Request a fresh premium marketing composition inspired by relevant source visual qualities. Internal concept imagery MAY include target text as a layout guide. It is not the customer deliverable. Persist the exact concept bytes as immutable input for separation.
+Send actual inspiration pixels, brief, approved copy, brand, supplied assets, canvas and explicit derived reference-policy instructions to the image creation/edit model. The permitted amount of recomposition comes from designFreedom; do not issue an unconditional "freely redesign" instruction at strict/close settings. Internal concept imagery MAY include target text as a layout guide. It is not the customer deliverable. Persist each attempt separately.
+
+### REVIEW_CONCEPT
+
+Before paid separation work, compare actual reference and current concept pixels against the derived policy and authoritative brief. Return structured `{passed, mode, checks, documentedExceptions, blockingIssues, suggestions}`. Each check identifies its observed anchor/feature and expected policy. For strict/close settings inspect panel/subject placement, proportions, overlap and typography hierarchy, using normalized anchor geometry as evidence rather than raw image-pixel similarity. For guided/broad settings review only the preservation requirements actually selected. At 100, source-layout differences are not blockers.
+
+Do not let invented content, unreadable copy or poor composition pass at any setting. Do not report an uncalibrated global similarity percentage. Unjustified policy violations return REFERENCE_ADHERENCE_FAILED and targeted concept repair instructions. Permit at most two concept correction rounds after initial concept generation. This budget is persisted separately from the two final HTML correction rounds; both obey the overall deadline. If policy conflicts cannot be resolved, return a clear terminal error instead of silently relaxing constraints. Freeze the approved concept identity and its policy review before EXTRACT_SCENE or asset separation.
 
 ### EXTRACT_SCENE
 
@@ -249,11 +378,11 @@ Extract/create up to three independent generated photo/subject/product assets wh
 
 Decode bytes with sharp: validate format, orientation, dimensions, aspect and alpha. Normalize full-canvas photo and overlay consistently to the target canvas. Overlay sample regions derived from the scene must confirm transparent photo windows and visible graphic areas. Reject fully empty/opaque overlays. Do not use a universal transparency percentage threshold for every composition.
 
-Inspect contrasting-background composites with vision for checkerboard patterns, photographic leakage, leftover text and missing artwork. Alpha statistics alone are insufficient. Regeneration can change alignment: adjust validated scene geometry and crops when actual separated assets require it.
+Inspect contrasting-background composites with vision for checkerboard patterns, photographic leakage, leftover text and missing artwork. Alpha statistics alone are insufficient. Regeneration can change alignment. Local geometry/crop adjustments are allowed only when they preserve the approved concept. Material panel, silhouette or subject displacement requires targeted asset repair and revalidation; do not redefine the target scene to excuse extraction drift.
 
 ### ASSEMBLE
 
-Build HTML deterministically from the validated scene, authoritative copy and resolved asset manifest. Use only allowlisted style fields, never unrestricted model HTML/CSS. Escape plain text and URL attributes. Resolve stable versioned media URLs before final assembly/review. If stable delivery cannot be provided, fail finalization explicitly instead of persisting expiring customer designs.
+Build HTML deterministically from the validated scene, authoritative copy and resolved asset manifest. Use only allowlisted style fields, never unrestricted model HTML/CSS. Escape plain text and URL attributes. For production delivery, resolve stable versioned media URLs before final assembly/review. Local prototype asset resolution follows the explicit Phase A exception. If stable delivery cannot be provided, fail finalization explicitly instead of persisting expiring customer designs.
 
 ### RENDER
 
@@ -261,7 +390,7 @@ Render exact HTML with actual editor styles/fonts; wait for document.fonts.ready
 
 ### REVIEW
 
-Send actual concept pixels, current native/feed render pixels, authoritative copy and asset-validation evidence to vision. Evaluate impact, hierarchy, readability, factual accuracy, collisions, duplication, separation and reconstruction of the target concept. Do not require source-template layout similarity.
+Send actual concept pixels, current native/feed render pixels, authoritative copy and asset-validation evidence to vision. Evaluate impact, hierarchy, readability, factual accuracy, collisions, duplication, separation and faithful reconstruction of the APPROVED target concept, regardless of designFreedom. Load the approved reference-policy review as evidence; do not apply an unconditional source-layout similarity requirement or override strict reference rules with a blanket inspiration-only instruction. If final reconstruction reveals an upstream policy defect, do not silently approve it: route a bounded concept repair, invalidate dependent outputs and re-run all downstream checks.
 
 Require strict JSON: `{passed, blockingIssues:[{code,layerId,assetId,message}], suggestions:[]}`. Optional IDs are null. Backend approval requires passing technical checks and zero blocking issues; a model saying passed:true does not override failures.
 
@@ -269,7 +398,7 @@ Require strict JSON: `{passed, blockingIssues:[{code,layerId,assetId,message}], 
 
 Allow at most two correction rounds after initial render. Use validated scene patches for placement/typography and targeted asset edits for raster defects. Every changed asset or HTML version requires downstream validation, reassembly, rendering and review. Bound targeted overlay repairs to two per job, not two per task retry.
 
-Hash exact final HTML bytes and a canonical ordered asset manifest containing asset IDs, immutable keys/versions and byte hashes. Store QA with matching concept/render identities, hashes, model identities and attempt. Mark SUCCEEDED only after all final artifacts are durable and final QA matches. Otherwise persist a terminal stage/code/message error.
+Hash exact final HTML bytes and a canonical ordered asset manifest containing asset IDs, immutable keys/versions and byte hashes. Store QA with matching concept/render identities, hashes, model identities, attempt, effective designFreedom, policyVersion, reference-policy review and documented deviations. Mark SUCCEEDED only after all final artifacts are durable and final QA matches. Otherwise persist a terminal stage/code/message error.
 
 ## 5. HTML/editor contract
 
@@ -332,110 +461,48 @@ Owner scope comes from authenticated caller context, not a model-supplied tenant
 
 Use least-privilege IAM: API gets job/idempotency access and StartExecution for this workflow; stage gets job-scoped artifacts, configured model/provider secrets and stable-media publishing; workflow can invoke stage; application can read authorized results. Scope model profiles/destination permissions to actual configuration. Do not log secrets, full base64, signed URL query strings or routine customer contact content. Log jobId/stage/attempt/duration/error/provider request ID.
 
-## 7. Required Bedrock Agent Integration
+## 7. Required Bedrock Agent integration
 
-The service must support invocation by an Amazon Bedrock Agent through an Action Group. This integration is a mandatory part of the implementation.
+Implement a required Bedrock Action Group adapter in broadcust-layered-design-api. Keep the core processing logic independently callable; independence does not make Bedrock integration optional for this delivery.
 
-Implement the integration in the broadcust-layered-design-api Lambda. Keep the design-processing logic separate from the Bedrock event and response handling.
+### 7.1 Action functions
 
-### 7.1 Action Group Functions
+Expose runLayeredDesign(requestJson:string) and getLayeredDesignStatus(jobId:string). requestJson serializes the public start request, INCLUDING designFreedom when supplied. Descriptions must stay under 200 characters. The trusted caller supplies a stable requestId. The agent forwards the caller's designFreedom unchanged; the service applies default 0 only if omitted. Do not have the agent choose a different value based on aesthetic preference.
 
-Expose these two functions:
+### 7.2 Event decoding
 
-| Function | Required parameter | Purpose |
-| --- | --- | --- |
-| runLayeredDesign | requestJson: string | Start an asynchronous design job. |
-| getLayeredDesignStatus | jobId: string | Retrieve job progress or completion status. |
+Read event.function and event.parameters name/value pairs. Validate the function name, required parameters, parsed requestJson and all public request fields. Reject malformed JSON. Both Bedrock and direct paths call the same service validation/authorization logic.
 
-requestJson contains the serialized start request defined in this specification.
-
-### 7.2 Incoming Bedrock Events
-
-Read the function name from event.function.
-
-Read parameters from event.parameters, where each parameter contains name and value.
-
-Example start event:
-
-```json
-{
-  "messageVersion": "1.0",
-  "actionGroup": "LayeredDesign",
-  "function": "runLayeredDesign",
-  "parameters": [
-    {
-      "name": "requestJson",
-      "type": "string",
-      "value": "{\"requestId\":\"example-001\",\"brief\":{\"post\":\"Marketing content\"},\"referenceImageUrl\":\"https://example.com/reference.png\"}"
-    }
-  ],
-  "sessionAttributes": {},
-  "promptSessionAttributes": {}
-}
-```
-
-Parse requestJson as JSON and validate it against the service's start-request schema. Reject malformed JSON, missing parameters and unsupported function names.
-
-The example URL is illustrative and must be replaced with an actual authorized image URL during testing.
-
-### 7.3 Bedrock Response Format
-
-Return results using this envelope:
+### 7.3 Response envelope
 
 ```js
 function respondToBedrock(event, result) {
   const functionResponse = {
-    responseBody: {
-      TEXT: {
-        body: JSON.stringify(result)
-      }
-    }
+    responseBody: { TEXT: { body: JSON.stringify(result) } }
   };
-
-  if (result.success === false) {
-    functionResponse.responseState = "FAILURE";
-  }
-
+  if (result.success === false) functionResponse.responseState = 'FAILURE';
   return {
-    messageVersion: "1.0",
+    messageVersion: '1.0',
     response: {
       actionGroup: event.actionGroup,
       function: event.function,
       functionResponse
     },
     sessionAttributes: event.sessionAttributes ?? {},
-    promptSessionAttributes:
-      event.promptSessionAttributes ?? {}
+    promptSessionAttributes: event.promptSessionAttributes ?? {}
   };
 }
 ```
 
-Preserve the incoming action-group name, function name and session attributes. Do not use an API Gateway statusCode/body response wrapper for Bedrock invocations.
+Preserve incoming action/function names and session attributes. Never use an API Gateway statusCode/body wrapper for Bedrock events.
 
-### 7.4 Starting a Job
+### 7.4 Starting a job
 
-runLayeredDesign must return promptly after durable job acceptance and workflow-start acknowledgement:
+Return accepted:true/jobId/QUEUED after durable acceptance and workflow-start acknowledgement, wrapped as above. Do not return finished HTML or say the design is complete. Retain the effective designFreedom and policy with the job.
 
-```json
-{
-  "success": true,
-  "accepted": true,
-  "jobId": "generated-job-id",
-  "status": "QUEUED"
-}
-```
+### 7.5 Final artifacts and direct backend retrieval
 
-Wrap this result in the Bedrock response envelope.
-
-This response confirms acceptance only. Do not wait for design completion, return final HTML or report that the design is finished.
-
-### 7.5 Reading Job Status
-
-getLayeredDesignStatus receives the jobId returned by the start operation.
-
-While processing, return the current status and stage.
-
-On completion, return a compact result containing authorized artifact references and validation hashes:
+Return compact status and real artifact pointers only. Artifact paths are illustrative, not mandatory literal filenames. A single existing result.json containing HTML, layers, assets and QA is sufficient; no final/ folder, design.html, layers.json or qa.json is required solely to match an example. Never return pointers to files that do not exist.
 
 ```json
 {
@@ -443,65 +510,34 @@ On completion, return a compact result containing authorized artifact references
   "jobId": "generated-job-id",
   "status": "SUCCEEDED",
   "result": {
-    "htmlKey": "layered-design/generated-job-id/final/design.html",
-    "previewKey": "layered-design/generated-job-id/final/preview.png",
-    "layersKey": "layered-design/generated-job-id/final/layers.json",
-    "qaKey": "layered-design/generated-job-id/final/qa.json",
+    "resultKey": "layered-design/generated-job-id/result.json",
+    "previewUrl": "https://media.example.com/preview.png",
+    "designFreedom": 10,
     "htmlHash": "sha256-value",
     "assetManifestHash": "sha256-value"
   }
 }
 ```
 
-Do not include full HTML, Base64 images or large documents in Bedrock action responses. The authenticated application backend retrieves the final artifacts and delivers the complete result to the client.
+Use the actual persisted result key, not a guessed path. Optional previewKey/qaKey may be included only for existing S3 objects. previewKey always means an S3 key; public Cloudinary addresses belong in previewUrl. Omit unavailable fields. Do not include full HTML/base64 in Bedrock responses.
 
-A failed design job returns success: true with status: "FAILED" and its stage error when the status lookup itself succeeds. Invalid or unauthorized requests return success: false.
+The authenticated application backend obtains the complete result through a DIRECT service call, not through the agent. This path returns the full result described in section 2.5. It does not require granting the application direct S3 bucket access. Implement authentication and ownership checks; invocation mode alone is not authorization. No backend role/account identity is assumed.
 
-### 7.6 Asynchronous Completion
+QA may be embedded in result.json or an existing review artifact. Include passed, blocking issues, suggestions, actual render-check outcomes, reviewed render identity, htmlHash, assetManifestHash, effective designFreedom, policyVersion and reference-review evidence. Missing checks cannot be marked passed.
 
-The application backend must retain the returned jobId and obtain the terminal job status through its background-job mechanism.
+Temporary job artifacts may expire after 30 days. Before deletion, a saved customer design's HTML, layer map, preview and ALL referenced images must be persisted to durable storage and verified. If that persistence path does not exist, exclude saved final artifacts and their dependencies from automatic deletion. A stable URL pointing to an object deleted after 30 days is not durable delivery. Do not enable a broad lifecycle rule that removes saved customer designs.
 
-Do not implement a prolonged polling loop inside the agent invocation. Bedrock does not automatically resume the original agent turn when the background design job finishes.
+### 7.6 Asynchronous completion
 
-The integration is complete only when the application can retrieve and deliver the reviewed HTML after SUCCEEDED, and report the stage error after FAILED.
+The application stores accepted jobId and reads progress through its background-job mechanism. It retrieves and delivers final HTML only after SUCCEEDED, and propagates stage errors after FAILED. Do not implement a prolonged polling loop inside the agent invocation. Background completion does not automatically resume the original agent turn.
 
-### 7.7 Direct Invocation for Testing
+### 7.7 Direct invocation
 
-Also support explicit direct Lambda invocations:
+For trusted direct tests accept `{operation:"runLayeredDesign", request:{...}}` and `{operation:"getLayeredDesignStatus", jobId:"..."}`; return the service result without the Bedrock envelope. Require an explicit operation. Resolve owner identity through the trusted deployment context, never through a model-supplied tenantId.
 
-```json
-{
-  "operation": "runLayeredDesign",
-  "request": {
-    "requestId": "example-001",
-    "brief": {
-      "post": "Marketing content"
-    },
-    "referenceImageUrl": "https://example.com/reference.png"
-  }
-}
-```
+### 7.8 Required configuration and permissions
 
-```json
-{
-  "operation": "getLayeredDesignStatus",
-  "jobId": "generated-job-id"
-}
-```
-
-Direct invocations return the operation result without the Bedrock envelope. Both invocation paths must use the same validation, authorization and service logic.
-
-### 7.8 Configuration and Permissions
-
-Provide:
-
-- The Action Group function definitions.
-- The Lambda handler and its Bedrock event adapter.
-- Lambda invocation permission for bedrock.amazonaws.com, restricted to the configured AWS account and agent ARN.
-- A trusted mechanism for associating agent sessions with job ownership.
-- Tests for both functions, response envelopes, malformed requests and unauthorized job access.
-
-Keep function and parameter descriptions within the target configuration's 200-character limit. Do not hardcode a particular agent ID into the core service logic.
+Deliver actual Action Group function definitions, Lambda handler/adapter, scoped Bedrock invoke permission for the configured source account/agent, trusted session-to-job ownership mapping and tests. Do not hardcode a specific agent ID in core processing. Test compact Bedrock results and full direct results separately.
 
 > **Requester clarification on 7.5 (resolved).** The `final/` key paths above are
 > illustrative, not required filenames. The service keeps its `<stage>/<attempt>`
@@ -512,9 +548,16 @@ Keep function and parameter descriptions within the target configuration's 200-c
 
 ```text
 layered-design/
+  prototype.mjs
+  pipeline.mjs
+  stages/
+  storage/local.mjs
+  storage/s3.mjs
+  examples/request.json
   api.mjs
   stage.mjs
   schemas.mjs
+  reference-policy.mjs
   jobs.mjs
   artifacts.mjs
   assemble-html.mjs
@@ -522,7 +565,9 @@ layered-design/
   validate-assets.mjs
   providers/image.mjs
   providers/vision.mjs
+  prompts/analyze-reference.txt
   prompts/concept.txt
+  prompts/review-concept.txt
   prompts/extract-scene.txt
   prompts/clean-photo.txt
   prompts/decoration-overlay.txt
@@ -534,13 +579,17 @@ layered-design/
   README.md
 ```
 
-Provide complete prompts, validators, implementations and IaC. Configure job table, artifact bucket, workflow ARN, authorized image origins, image provider, vision model IDs, font/style paths and stable-media adapter. Validate required configuration at startup/preflight. Credentials belong in the deployment's secret mechanism, never source code.
+Deliver prototype.mjs, pipeline.mjs, shared stages, local storage, schemas, real provider integrations, prompts, assembler and renderer first. Add production entry points, storage adapters, workflow and IaC in Phase C. Document the local command, required configuration, artifact paths and acceptance status in README.md.
+
+Provide complete prompts, validators, implementations and IaC for the final delivery. Configure job table, artifact bucket, workflow ARN, authorized image origins, image provider, vision model IDs, font/style paths and stable-media adapter. Validate required configuration at startup/preflight. Credentials belong in the deployment's secret mechanism, never source code.
 
 Caller integration must store accepted jobId, read status with bounded backoff, deliver the completed HTML/result only on SUCCEEDED, and expose stage errors on FAILED. No prose parsing to infer completion. The standalone service does not assume an existing client's result contract; implement an explicit adapter if needed.
 
 ## 9. Acceptance tests and required deliverables
 
-Unit tests must cover request validation, response shapes, optional Bedrock envelope, idempotency/conflicts, ownership, scene validation, escaped HTML, unique layer classes, independent overlay, opaque/empty alpha rejection, final hash invalidation, exhausted repair counts and proper failures.
+Apply the phase gates in section 0. First deliver and evaluate one real local design, then editor compatibility and variation, then production acceptance. The numbered start/status tests below apply to the production service; local prototype runs must not fabricate asynchronous acceptance or cloud deployment evidence.
+
+Unit tests must cover request validation, response shapes, required Bedrock envelope, idempotency/conflicts, ownership, scene validation, escaped HTML, unique layer classes, independent overlay, opaque/empty alpha rejection, final hash invalidation, exhausted repair counts and proper failures.
 
 Explicitly enabled integration tests must:
 1. Start a real job and receive jobId promptly.
@@ -550,6 +599,15 @@ Explicitly enabled integration tests must:
 5. Verify required text/contact accuracy, no baked final words, loaded assets/fonts, no text overflow, native/feed render and matching final hashes.
 6. Exercise unsupported transparency, image timeout, invalid vision JSON, renderer failure and unavailable media delivery. No fake success or unreviewed fallback.
 
-A useful acceptance brief is an Italy winter travel offer: Christmas/Hanukkah, Tuscany/Umbria/Southern Italy, flights/car/hotels/custom itinerary/personal service, with supplied business contacts and no invented price/date. Test Hebrew RTL as well as Latin contacts. Exact source-template resemblance is not the acceptance criterion.
+A useful acceptance brief is an Italy winter travel offer: Christmas/Hanukkah, Tuscany/Umbria/Southern Italy, flights/car/hotels/custom itinerary/personal service, with supplied business contacts and no invented price/date. Test Hebrew RTL as well as Latin contacts. Source-template adherence is evaluated according to the effective designFreedom policy; pixel identity is never promised. Final HTML must faithfully reconstruct the approved concept at every setting.
+
+Additional required designFreedom tests:
+- Omitted field defaults to 0; explicit 0 remains 0; explicit 50 remains 50. Omitted and explicit 0 normalize to the same canonical request hash. Values 0, 1, 25, 26, 50, 51, 75, 76 and 100 map to the correct modes. Reject -1, 101, null, "10", 10.5 and booleans.
+- Bedrock and direct calls preserve the same effective value. Changing it under an existing requestId yields an idempotency conflict.
+- Prompt generation includes explicit preservation/change rules; no low-freedom prompt unconditionally requests a new layout.
+- Use the SAME brief/reference in separately enabled integration jobs at 0, 25, 50, 75 and 100. Record policy evidence and documented exceptions. Show close preservation at low settings and permission for broader recomposition at high settings; do not claim statistically calibrated percentages or require random outputs to differ monotonically.
+- A strict-mode concept with unjustified anchor/panel displacement fails reference review; justified brand/contact replacements do not fail.
+- A final HTML render that drifts from the approved concept fails even at 100. Regenerating the concept invalidates its scene/assets/render/QA.
+- Test bounded concept-repair exhaustion, REFERENCE_CONSTRAINT_CONFLICT, combined result.json retrieval, real artifact pointers, previewKey/previewUrl distinction, and saved-design retention beyond temporary job cleanup.
 
 Deliver complete Lambda code, IaC, workflow, provider integrations, full prompt files, build/deploy/configuration commands, example payloads, test outputs and a precise list of unavailable dependencies. Do not deploy to production automatically. Do not call implementation complete when only the gateway works or stages are mocked. Mock tests alone do not establish visual quality, true transparency or end-to-end readiness.

@@ -179,6 +179,20 @@ class StartRequest(Strict):
     suppliedAssets: list[SuppliedAsset] = Field(
         default_factory=list, max_length=conf.MAX_SUPPLIED_ASSETS
     )
+    # SPEC section 2.7. Absent -> 0 (default, validators do not run); explicit
+    # null is rejected by the validator below rather than defaulted.
+    designFreedom: int = 0
+
+    @field_validator("designFreedom", mode="before")
+    @classmethod
+    def _design_freedom(cls, v):
+        # bool is an int subclass, so it must be rejected explicitly. "10" and
+        # 10.5 would otherwise be coerced by pydantic's default lax mode.
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("designFreedom must be an integer from 0 through 100")
+        if not 0 <= v <= 100:
+            raise ValueError("designFreedom must be an integer from 0 through 100")
+        return v
 
     @field_validator("requestId")
     @classmethod
@@ -418,6 +432,9 @@ class ReviewVerdict(Strict):
     passed: bool
     blockingIssues: list[BlockingIssue] = Field(max_length=40)
     suggestions: list[str] = Field(max_length=40)
+    # Defaults to False, the safe direction: an absent flag routes to the ordinary
+    # HTML correction rather than regenerating a paid concept.
+    conceptDefect: bool = False
 
     @property
     def approved(self) -> bool:
@@ -432,6 +449,107 @@ class ReviewVerdict(Strict):
 def parse_review(payload):
     try:
         return ReviewVerdict.model_validate(payload)
+    except ValidationError as exc:
+        from lib.errors import InvalidModelJson
+
+        raise InvalidModelJson(_first_error(exc)) from exc
+
+
+# --------------------------------------------------------------------------
+# Reference analysis and concept review (SPEC sections ANALYZE_REFERENCE and
+# REVIEW_CONCEPT). Both come from the vision model and are treated as data.
+# Strict structured outputs cannot express numeric ranges, so they are enforced
+# here instead.
+# --------------------------------------------------------------------------
+
+ANCHOR_KINDS = ("dominantImage", "graphicPanel", "textZone", "logo", "other")
+ISSUE_CATEGORIES = ("layoutAdherence", "content", "readability", "composition", "other")
+
+
+class NormalizedBox(Strict):
+    """Canvas-independent geometry: every value is a 0..1 fraction."""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+    @field_validator("x", "y", "width", "height")
+    @classmethod
+    def _unit(cls, v):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("box values must be between 0 and 1")
+        return v
+
+
+class ReferenceAnchor(Strict):
+    id: str = Field(min_length=1, max_length=64)
+    kind: Literal["dominantImage", "graphicPanel", "textZone", "logo", "other"]
+    box: NormalizedBox
+    relativeScale: float
+    confidence: float
+
+    @field_validator("relativeScale", "confidence")
+    @classmethod
+    def _unit(cls, v):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("value must be between 0 and 1")
+        return v
+
+
+class ReferenceAnalysis(Strict):
+    # No font-identification field on purpose: a font cannot be named from pixels.
+    anchors: list[ReferenceAnchor] = Field(max_length=40)
+    hierarchy: list[str] = Field(max_length=40)
+    overlaps: list[str] = Field(max_length=40)
+    alignment: str
+    readingFlow: str
+    palette: list[str] = Field(max_length=20)
+    visualQualities: list[str] = Field(max_length=40)
+    notes: str
+
+
+class ConceptCheck(Strict):
+    anchorId: Optional[str]
+    feature: str
+    expectedPolicy: str
+    observed: str
+    passed: bool
+
+
+class ConceptIssue(Strict):
+    code: str
+    category: Literal["layoutAdherence", "content", "readability", "composition", "other"]
+    message: str
+
+
+class ConstraintConflict(Strict):
+    conflicted: bool
+    reason: Optional[str]
+
+
+class ConceptReviewVerdict(Strict):
+    passed: bool
+    mode: str
+    checks: list[ConceptCheck] = Field(max_length=60)
+    documentedExceptions: list[str] = Field(max_length=40)
+    blockingIssues: list[ConceptIssue] = Field(max_length=40)
+    suggestions: list[str] = Field(max_length=40)
+    constraintConflict: ConstraintConflict
+
+
+def parse_reference_analysis(payload):
+    try:
+        return ReferenceAnalysis.model_validate(payload)
+    except ValidationError as exc:
+        from lib.errors import InvalidModelJson
+
+        raise InvalidModelJson(_first_error(exc)) from exc
+
+
+def parse_concept_review(payload):
+    try:
+        return ConceptReviewVerdict.model_validate(payload)
     except ValidationError as exc:
         from lib.errors import InvalidModelJson
 

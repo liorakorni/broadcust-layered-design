@@ -81,6 +81,9 @@ MAX_REFERENCE_BYTES = 16 * 1024 * 1024
 MAX_INDEPENDENT_ASSETS = 3
 INDEPENDENT_ASSET_CONCURRENCY = 2
 MAX_CORRECTION_ROUNDS = 2
+# SPEC REVIEW_CONCEPT: at most two concept correction rounds, persisted separately
+# from the two final HTML correction rounds above.
+MAX_CONCEPT_ROUNDS = 2
 MAX_OVERLAY_REPAIRS = 2
 WORKFLOW_MAX_MINUTES = 30
 

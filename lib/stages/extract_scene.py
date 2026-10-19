@@ -137,7 +137,7 @@ def run(job_id, attempt, asset_id=None):
 
     copy_key = job["artifacts"][Stage.PREPARE_COPY]["copy"]
     copy_items = artifacts.get_json(job_id, copy_key)["items"]
-    concept_key = job["artifacts"][Stage.CONCEPT]["concept"]
+    concept_key = jobs.approved_concept(job)["key"]
     concept_bytes = artifacts.get_bytes(job_id, concept_key)
 
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}

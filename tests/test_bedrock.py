@@ -88,7 +88,8 @@ FULL_RESULT = {
     "resultKey": None,
     "htmlKey": "layered-design/J/ASSEMBLE/1/design.html",
     "previewKey": "layered-design/J/RENDER/1/native.png",
-    "reviewKey": "layered-design/J/REVIEW/1/review.json",
+    "qaKey": "layered-design/J/REVIEW/1/review.json",
+    "designFreedom": 0,
     "qa": {"passed": True, "blockingIssues": [], "renderChecks": []},
 }
 
@@ -279,16 +280,18 @@ def test_compact_result_carries_references_and_hashes_only(start_payload):
     assert res["status"] == "SUCCEEDED"
     assert res["result"] == {
         "resultKey": stored["resultKey"],
-        "htmlKey": FULL_RESULT["htmlKey"],
         "previewKey": FULL_RESULT["previewKey"],
         "previewUrl": FULL_RESULT["previewUrl"],
-        "reviewKey": FULL_RESULT["reviewKey"],
+        "qaKey": FULL_RESULT["qaKey"],
+        # 0 is the default and must survive: a falsy filter would drop it.
+        "designFreedom": 0,
         "htmlHash": FULL_RESULT["htmlHash"],
         "assetManifestHash": FULL_RESULT["assetManifestHash"],
     }
     flattened = json.dumps(res)
-    for forbidden in ("full design", "layerMap", "assets", "qa", "layersKey", "qaKey"):
+    for forbidden in ("full design", "layerMap", "assets", "layersKey", "htmlKey"):
         assert forbidden not in flattened, forbidden
+    assert "qa" not in res["result"]
 
 
 def test_unavailable_fields_are_omitted_not_null(start_payload):

@@ -24,7 +24,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import conf
-from lib.errors import IdempotencyConflict, JobNotFound, Status, Unauthorized
+from lib.errors import AssetInvalid, IdempotencyConflict, JobNotFound, Status, Unauthorized
 
 #: Failed and in-flight jobs expire after this. A SUCCEEDED job is a saved design
 #: and has its expiry removed by `mark_succeeded`.
@@ -125,8 +125,11 @@ def job_exists(job_id):
     return bool(item and item.get("requestKey"))
 
 
-def create_job(job_id, owner_scope, request_hash, request_key, canvas):
+def create_job(job_id, owner_scope, request_hash, request_key, canvas,
+               design_freedom=0):
     """Record the job as QUEUED before any execution starts."""
+    from lib import reference_policy
+
     _tbl().put_item(
         Item={
             "pk": f"JOB#{job_id}",
@@ -145,6 +148,11 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas):
             "attempts": {},
             "correctionRounds": 0,
             "overlayRepairs": 0,
+            # Must be seeded: bump_counter's condition `conceptRounds < :limit`
+            # is false when the attribute is absent, which would read as exhausted.
+            "conceptRounds": 0,
+            "designFreedom": design_freedom,
+            "policyVersion": reference_policy.POLICY_VERSION,
             "createdAt": _now(),
             "updatedAt": _now(),
             "expiresAt": _ttl(),
@@ -231,6 +239,33 @@ def record_artifacts(job_id, stage, attempt, artifacts):
             ":now": _now(),
         },
     )
+
+
+def freeze_concept(job_id, approved):
+    """Pin the approved concept and its policy review on the job.
+
+    SPEC REVIEW_CONCEPT: the approved concept identity is frozen before
+    EXTRACT_SCENE or any separation. Downstream stages read this, not the latest
+    CONCEPT artifact, so both separation branches edit the same bytes even though
+    the concept stage can now run again at a later attempt.
+    """
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET approvedConcept = :c, updatedAt = :now",
+        ExpressionAttributeValues={":c": approved, ":now": _now()},
+    )
+
+
+def approved_concept(job):
+    """The frozen approved concept pointer, or an error if none was approved.
+
+    A missing pointer means a stage ran before REVIEW_CONCEPT approved anything,
+    which must fail loudly rather than fall back to an unreviewed concept.
+    """
+    approved = job.get("approvedConcept")
+    if not approved or not approved.get("key"):
+        raise AssetInvalid("No approved concept is frozen for this job.")
+    return approved
 
 
 def bump_counter(job_id, field, limit):

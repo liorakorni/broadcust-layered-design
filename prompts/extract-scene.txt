@@ -1,4 +1,6 @@
 Analyse this marketing composition and return a strict JSON scene description.
+Describe the approved concept exactly as it appears. Do not improve, simplify or
+rearrange it, whatever its layout.
 
 COORDINATES:
 - Use PIXELS measured from the TOP-LEFT corner of the image.

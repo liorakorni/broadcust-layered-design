@@ -1,0 +1,38 @@
+You are analysing an inspiration image (Image 1) for a marketing design that will
+be created for a different business. Record what the image actually contains.
+
+TARGET CANVAS: {width}x{height} pixels.
+
+REFERENCE POLICY (designFreedom {design_freedom}, mode {mode}):
+{policy_instruction}
+
+What must be preserved under this policy:
+{must_preserve}
+
+TARGET COPY (the new business's text; the reference's own text is NOT this):
+{copy_block}
+
+Report, from the pixels you can see:
+- anchors: the major structural elements. For each give an id, a kind
+  (dominantImage, graphicPanel, textZone, logo or other), a normalized box
+  (x, y, width, height, each a fraction of the image between 0 and 1, measured
+  from the top-left), relativeScale (the fraction of the canvas area it covers,
+  between 0 and 1) and confidence (between 0 and 1).
+- hierarchy: the reading order of importance, most dominant first.
+- overlaps: which elements overlap which, and which is on top.
+- alignment: how the elements are aligned.
+- readingFlow: the path the eye takes through the image.
+- palette: the dominant colours as hex codes or plain names.
+- visualQualities: lighting, depth, mood, typographic character and similar
+  qualities worth learning from.
+- notes: anything else a designer adapting this image should know.
+
+Rules:
+- Describe geometry from what is visible. Do not guess an exact font name from
+  pixels; describe its character (for example "heavy geometric sans") instead.
+- If the target canvas has a different aspect ratio from the reference, report
+  the reference geometry as it is. Mapping is done later.
+- Do not copy the reference's text, business name or contact details into your
+  answer except where needed to identify an element.
+
+Return strict JSON matching the schema.

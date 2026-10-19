@@ -84,10 +84,10 @@ def caller_context(event):
 #: layer map, QA detail) is retrieved through an authenticated direct call.
 _COMPACT_FIELDS = (
     "resultKey",
-    "htmlKey",
     "previewKey",
     "previewUrl",
-    "reviewKey",
+    "qaKey",
+    "designFreedom",
     "htmlHash",
     "assetManifestHash",
 )
@@ -103,7 +103,11 @@ def compact_result(response):
     if not isinstance(result, dict):
         return response
     compact = {k: v for k, v in response.items() if k != "result"}
-    compact["result"] = {k: result[k] for k in _COMPACT_FIELDS if result.get(k)}
+    # `is not None`, not truthiness: designFreedom 0 is the default and a real
+    # value that a falsy filter would silently drop.
+    compact["result"] = {
+        k: result[k] for k in _COMPACT_FIELDS if k in result and result[k] is not None
+    }
     return compact
 
 

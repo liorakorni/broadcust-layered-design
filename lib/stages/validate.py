@@ -43,6 +43,29 @@ COMPOSITE_SCHEMA = {
     },
 }
 
+FIDELITY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["displaced", "description"],
+    "properties": {
+        "displaced": {"type": "boolean"},
+        "description": {"type": "string"},
+    },
+}
+
+_FIDELITY_PROMPT = """Image 1 is the approved concept. Image 2 is the clean photograph with the
+separated decoration overlay stacked on top of it. Text is intentionally absent
+from image 2.
+
+Judge ONLY whether image 2 restores the concept's artwork in the same place.
+
+- displaced: true if a panel, ribbon, badge, silhouette or the main photographic
+  subject sits materially elsewhere, at a materially different size, or is missing,
+  compared with image 1. Small edge differences and the absent text are NOT
+  displacement.
+- description: when displaced, name each element and say where it is in image 1
+  versus image 2, so the overlay can be repaired. Empty string otherwise."""
+
 _COMPOSITE_PROMPT = """These three images show the SAME graphic overlay composited onto
 three different solid backgrounds: magenta, white and black.
 
@@ -82,6 +105,11 @@ def run(job_id, attempt, asset_id=None):
     try:
         stats = validate_assets.validate_overlay(overlay, scene, canvas)
         inspect_composites(overlay, canvas, job_id, attempt)
+        # Regeneration can change alignment. Re-stacking the separated layers and
+        # comparing with the approved concept catches material displacement, which
+        # is repaired at the asset rather than excused by editing the scene.
+        concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
+        inspect_fidelity(background, overlay, concept, job_id, attempt)
     except InvalidTransparency as exc:
         # Raises OverlayRepairNeeded when a repair is still available, which the
         # workflow routes back to a targeted overlay edit. Otherwise the original
@@ -135,6 +163,39 @@ def inspect_composites(overlay_bytes, canvas, job_id, attempt):
         jobs.record_overlay_defect(job_id, verdict["leftoverDescription"])
         raise InvalidTransparency(
             "The decoration layer was not cleanly separated: " + "; ".join(problems)
+        )
+    return verdict
+
+
+def inspect_fidelity(background_bytes, overlay_bytes, concept_bytes, job_id, attempt):
+    """Check the stacked layers against the approved concept.
+
+    Material displacement is not excused by adjusting the scene: it is recorded as
+    the overlay defect so the bounded targeted repair acts on it.
+    """
+    from PIL import Image
+
+    photo, _ = validate_assets.load_rgba(background_bytes)
+    overlay, _ = validate_assets.load_rgba(overlay_bytes)
+    overlay = overlay.resize(photo.size, Image.LANCZOS)
+    stacked = Image.alpha_composite(photo, overlay).convert("RGB")
+    stacked.thumbnail((768, 768), Image.LANCZOS)
+    buf = io.BytesIO()
+    stacked.save(buf, format="PNG")
+
+    verdict = vision.analyze(
+        _FIDELITY_PROMPT,
+        (concept_bytes, buf.getvalue()),
+        schema=FIDELITY_SCHEMA,
+        schema_name="composite_fidelity_v1",
+        model=conf.REVIEW_MODEL,
+        operation_id=f"{job_id}:validate_assets_fidelity:{attempt}",
+    )
+    if verdict["displaced"]:
+        jobs.record_overlay_defect(job_id, verdict["description"])
+        raise InvalidTransparency(
+            "The separated layers do not reconstruct the approved concept: "
+            + (verdict["description"] or "material displacement")
         )
     return verdict
 

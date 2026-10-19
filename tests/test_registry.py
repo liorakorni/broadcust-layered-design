@@ -11,7 +11,7 @@ from lib.errors import Stage
 from lib.stages import build_registry
 
 
-def test_all_twelve_stages_are_registered():
+def test_all_fourteen_stages_are_registered():
     registry = build_registry()
     missing = set(Stage.PIPELINE) - set(registry)
     assert not missing, f"unimplemented stages: {sorted(missing)}"
