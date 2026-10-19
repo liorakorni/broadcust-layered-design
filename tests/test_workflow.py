@@ -163,11 +163,29 @@ def test_map_iterates_the_ids_extract_scene_produced():
     )
 
 
-def test_exhausted_corrections_fall_through_to_failure():
-    assert STATES["ReviewPassed"]["Default"] == "RecordFailure"
-    second = STATES["ReviewPassed"]["Choices"][1]
-    assert second["Variable"] == "$.review.artifacts.correctionAvailable"
-    assert second["Next"] == "Correct"
+def test_unapproved_review_always_reaches_correct():
+    """Correct is what raises CorrectionExhausted when no round is left, and its
+    Catch is what supplies $.failure. Skipping it is what stranded a live job."""
+    choice = STATES["ReviewPassed"]
+    assert choice["Default"] == "Correct"
+    assert [c["Next"] for c in choice["Choices"]] == ["Finalize"]
+    assert STATES["Correct"]["Catch"][0]["Next"] == "RecordFailure"
+
+
+def test_record_failure_is_only_reached_through_a_catch():
+    """RecordFailure reads $.failure, which only a Catch's ResultPath sets. An
+    ordinary Next, a Choice branch or a Default into it ends the execution with
+    States.Runtime and never records the failure, so the job stays RUNNING and
+    a polling caller waits forever."""
+    for name, state in STATES.items():
+        direct = [state.get("Next"), state.get("Default")]
+        direct += [c.get("Next") for c in state.get("Choices", [])]
+        if name == "RecordFailure":
+            continue
+        assert "RecordFailure" not in direct, name
+        for catch in state.get("Catch", []):
+            if catch["Next"] == "RecordFailure":
+                assert catch["ResultPath"] == "$.failure", name
 
 
 def test_review_choice_requires_backend_approval_flag():

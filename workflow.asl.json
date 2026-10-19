@@ -376,20 +376,15 @@
     },
     "ReviewPassed": {
       "Type": "Choice",
-      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it.",
+      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it. Anything not approved goes to Correct, which raises CorrectionExhausted when no round is left. It must not go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever.",
       "Choices": [
         {
           "Variable": "$.review.artifacts.approved",
           "BooleanEquals": true,
           "Next": "Finalize"
-        },
-        {
-          "Variable": "$.review.artifacts.correctionAvailable",
-          "BooleanEquals": true,
-          "Next": "Correct"
         }
       ],
-      "Default": "RecordFailure"
+      "Default": "Correct"
     },
     "Correct": {
       "Type": "Task",
