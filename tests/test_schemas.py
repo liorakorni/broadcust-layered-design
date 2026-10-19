@@ -177,6 +177,28 @@ def test_duplicate_content_keys_rejected(scene_payload):
         parse_scene(scene_payload, 1080, 1080)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "title.main",
+        "service.personal_support",
+        "service.custom_itinerary",
+        "cta.book_now",
+        "contact.phone",
+        "title",
+    ],
+)
+def test_every_key_the_copy_stage_accepts_is_accepted_in_a_scene(scene_payload, key):
+    # The copy manifest and the scene are validated by separate patterns. A key
+    # approved by one and refused by the other fails a paid job midway.
+    from lib.stages.prepare_copy import CONTENT_KEY as copy_pattern
+
+    assert copy_pattern.match(key)
+    scene_payload["textLayers"][0]["contentKey"] = key
+    scene = parse_scene(scene_payload, 1080, 1080)
+    assert scene.textLayers[0].contentKey == key
+
+
 def test_content_key_outside_approved_copy_rejected(scene_payload):
     # The model inventing a content key is how invented copy would enter.
     with pytest.raises(InvalidScene):

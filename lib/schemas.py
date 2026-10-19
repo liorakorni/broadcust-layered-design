@@ -26,7 +26,11 @@ from lib.errors import InvalidRequest, InvalidScene
 HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 FONT_NAME = re.compile(r"^[A-Za-z0-9 _-]{1,64}$")
 ASSET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-CONTENT_KEY = re.compile(r"^[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)*$")
+# Must accept every key PREPARE_COPY accepts (lib/stages/prepare_copy.CONTENT_KEY,
+# which allows underscores). The two disagreeing is what failed a live job at
+# EXTRACT_SCENE on `service.custom_itinerary`, a key the copy stage had approved.
+# camelCase stays allowed here so keys that were valid before keep validating.
+CONTENT_KEY = re.compile(r"^[a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)*$")
 
 #: SPEC section 5. Roles exist to describe real content; none of them licenses
 #: inventing a supporting fact to fill the slot.
