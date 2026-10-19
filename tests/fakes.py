@@ -59,7 +59,12 @@ class FakeTable:
                 if m and item.get(m.group(1), 0) >= values[":limit"]:
                     raise _conditional_failure("UpdateItem")
 
-        body = UpdateExpression[len("SET "):]
+        # `SET ... REMOVE a, b`: apply the removals, then run the SET logic on
+        # the remainder.
+        body, _, removals = UpdateExpression.partition(" REMOVE ")
+        for name in (n.strip() for n in removals.split(",") if n.strip()):
+            item.pop(resolve(name), None)
+        body = body[len("SET "):]
         updated = {}
         # Split on commas that separate assignments.
         for part in re.split(r",\s*(?=[#\w.]+\s*=)", body):
@@ -115,14 +120,28 @@ class FakeS3:
 
     def __init__(self):
         self.objects = {}
+        # Key -> "k=v&k2=v2", as S3 reports it. A write replaces the tag set.
+        self.tags = {}
 
-    def put_object(self, Bucket, Key, Body, ContentType=None, IfNoneMatch=None):
+    def put_object(
+        self, Bucket, Key, Body, ContentType=None, IfNoneMatch=None, Tagging=None
+    ):
         if IfNoneMatch == "*" and Key in self.objects:
             raise ClientError(
                 {"Error": {"Code": "PreconditionFailed", "Message": "exists"}},
                 "PutObject",
             )
         self.objects[Key] = Body
+        self.tags[Key] = Tagging or ""
+        return {}
+
+    def put_object_tagging(self, Bucket, Key, Tagging):
+        if Key not in self.objects:
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+                "PutObjectTagging",
+            )
+        self.tags[Key] = "&".join(f"{t['Key']}={t['Value']}" for t in Tagging["TagSet"])
         return {}
 
     def get_object(self, Bucket, Key):

@@ -34,6 +34,11 @@ provider:
           - --provenance=false
           - --sbom=false
 
+custom:
+  # Empty (or absent from config) means no Bedrock agent is allowed to invoke
+  # the API function; the service works the same either way.
+  bedrockAgentArn: ${file(./config.${sls:stage}.json):bedrock_agent_arn, ''}
+
 functions:
   api:
     name: ${self:service}-${sls:stage}-api
@@ -57,6 +62,11 @@ functions:
     role: StageRole
 
 resources:
+  Conditions:
+    # Deployments without an agent configured still succeed; the permission is
+    # simply absent. Nothing in the handler knows the agent exists.
+    HasBedrockAgent: !Not [!Equals ['${self:custom.bedrockAgentArn}', '']]
+
   Resources:
     # --- Storage ------------------------------------------------------------
     JobsTable:
@@ -89,11 +99,16 @@ resources:
                 SSEAlgorithm: AES256
         LifecycleConfiguration:
           Rules:
-            # Intermediate artifacts are diagnostic. Final designs live in
-            # Cloudinary, so nothing customer-facing expires with these.
-            - Id: expire-intermediate-artifacts
+            # Only objects tagged lifecycle=temporary expire. Every object is
+            # written temporary; FINALIZE retags a saved design's objects as
+            # retained (lib/artifacts.retain), so saved designs are never
+            # deleted. Failed jobs never retag, so their artifacts expire.
+            - Id: expire-temporary-artifacts
               Status: Enabled
               Prefix: layered-design/
+              TagFilters:
+                - Key: lifecycle
+                  Value: temporary
               ExpirationInDays: 30
 
     # --- IAM: least privilege, one role per function ------------------------
@@ -135,10 +150,26 @@ resources:
                 # identical bytes regardless of retries. That is the only thing
                 # it writes, so the grant is scoped to that one stage prefix
                 # rather than to the whole job tree.
+                # PutObjectTagging is required because every write carries the
+                # lifecycle=temporary tag.
                 - Effect: Allow
-                  Action: s3:PutObject
+                  Action:
+                    - s3:PutObject
+                    - s3:PutObjectTagging
                   Resource:
                     !Sub '${ArtifactBucket.Arn}/layered-design/*/ACCEPT_REQUEST/*'
+
+    # Lets the configured Bedrock agent, and only that agent in this account,
+    # invoke the API function as an Action Group (SPEC 7.8).
+    BedrockInvokeApiPermission:
+      Type: AWS::Lambda::Permission
+      Condition: HasBedrockAgent
+      Properties:
+        FunctionName: !GetAtt ApiLambdaFunction.Arn
+        Action: lambda:InvokeFunction
+        Principal: bedrock.amazonaws.com
+        SourceAccount: !Ref AWS::AccountId
+        SourceArn: ${self:custom.bedrockAgentArn}
 
     StageRole:
       Type: AWS::IAM::Role
@@ -157,10 +188,13 @@ resources:
             PolicyDocument:
               Version: '2012-10-17'
               Statement:
+                # PutObjectTagging covers both the initial lifecycle=temporary
+                # tag on write and FINALIZE's retag of a saved design.
                 - Effect: Allow
                   Action:
                     - s3:GetObject
                     - s3:PutObject
+                    - s3:PutObjectTagging
                   Resource: !Sub '${ArtifactBucket.Arn}/layered-design/*'
                 - Effect: Allow
                   Action:

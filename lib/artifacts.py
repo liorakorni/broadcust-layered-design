@@ -24,6 +24,9 @@ from lib.errors import AssetInvalid, LayeredDesignError, Stage
 
 ROOT_PREFIX = "layered-design"
 
+#: Applied to every object on write; see `put_bytes` and `retain`.
+TEMPORARY_TAGGING = "lifecycle=temporary"
+
 #: Job IDs appear in S3 keys, so they are restricted to characters that cannot
 #: traverse or escape the prefix.
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -88,7 +91,10 @@ def put_bytes(key, data, content_type, *, overwrite=False):
     Writes are conditional by default so an accidental reuse of a key surfaces as
     an error instead of silently replacing an artifact another stage already read.
     """
-    extra = {"ContentType": content_type}
+    # Every object starts temporary. The bucket's lifecycle rule only expires
+    # objects carrying this tag, and FINALIZE retags a saved design's objects
+    # via `retain`, so saved designs outlive the 30-day expiry.
+    extra = {"ContentType": content_type, "Tagging": TEMPORARY_TAGGING}
     if not overwrite:
         extra["IfNoneMatch"] = "*"
     try:
@@ -122,6 +128,21 @@ def put_json(key, obj, *, overwrite=False):
     return put_bytes(
         key, data, "application/json; charset=utf-8", overwrite=overwrite
     )
+
+
+_RETAINED = {"TagSet": [{"Key": "lifecycle", "Value": "retained"}]}
+
+
+def retain(job_id, keys):
+    """Exempt these objects from the temporary-artifact expiry.
+
+    S3 replaces the whole tag set, so this is idempotent and safe to repeat.
+    Every key is checked against the job prefix first.
+    """
+    for key in sorted(set(keys)):
+        _client().put_object_tagging(
+            Bucket=conf.ARTIFACT_BUCKET, Key=job_key(job_id, key), Tagging=_RETAINED
+        )
 
 
 def get_json(job_id, key):

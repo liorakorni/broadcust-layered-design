@@ -1,8 +1,8 @@
 """Stable media publishing via Cloudinary.
 
 The HTML deliverable references assets by URL, so those URLs must outlive the
-job and be publicly readable. The S3 artifact bucket is private and has a 30-day
-lifecycle, which makes it the wrong place to serve from.
+job and be publicly readable. The S3 artifact bucket is private and expires its
+temporary artifacts after 30 days, which makes it the wrong place to serve from.
 
 Uploads are idempotent by public_id: a retried stage overwrites the same object
 with identical bytes rather than accumulating duplicates, and the returned URL is

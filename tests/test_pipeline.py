@@ -19,8 +19,9 @@ from PIL import Image
 import conf
 import handler_stage
 from lib import artifacts, jobs, media, reference, render as renderer
-from lib.errors import Stage, Status
+from lib.errors import FinalHashMismatch, ReviewBlocked, Stage, Status
 from lib.providers import image as image_provider, vision as vision_provider
+from lib.stages import review as review_stage
 from tests.fakes import FakeS3, FakeTable
 
 CANVAS = {"width": 1024, "height": 1024}
@@ -250,7 +251,8 @@ def pipeline(monkeypatch):
             "native": fake_photo(),
             "feed": fake_photo(),
             "checks": {"problems": [], "textLayers": len(scene["textLayers"]),
-                       "images": 2},
+                       "images": 2,
+                       "performed": list(review_stage.REQUIRED_RENDER_CHECKS)},
         }
 
     monkeypatch.setattr(renderer, "render", fake_render)
@@ -432,3 +434,159 @@ def test_models_stay_separately_configurable(pipeline):
     assert conf.COPY_MODEL in used
     assert conf.SCENE_MODEL in used
     assert conf.REVIEW_MODEL in used
+
+
+# --- result enrichment, QA and retention -------------------------------------
+
+
+def _stages_up_to_review(pipeline):
+    job_id = pipeline["jobId"]
+    for stage in (
+        Stage.PREFLIGHT,
+        Stage.PREPARE_COPY,
+        Stage.CONCEPT,
+        Stage.EXTRACT_SCENE,
+        Stage.CLEAN_PHOTO,
+        Stage.DECORATION_OVERLAY,
+        Stage.VALIDATE_ASSETS,
+        Stage.ASSEMBLE,
+        Stage.RENDER,
+    ):
+        run_stage(job_id, stage)
+    return run_stage(job_id, Stage.REVIEW)
+
+
+def test_result_references_real_objects(pipeline):
+    job = run_pipeline(pipeline)
+    result = artifacts.get_json(pipeline["jobId"], job["resultKey"])
+    assert result["resultKey"] == job["resultKey"]
+    for field in ("resultKey", "htmlKey", "previewKey", "reviewKey"):
+        assert result[field] in pipeline["s3"].objects, field
+    assert result["previewUrl"] == result["preview"]
+    assert result["previewUrl"].startswith("https://")
+    # No duplicate files were created to match the spec's example paths.
+    assert not any("/final/" in key for key in pipeline["s3"].objects)
+
+
+def test_qa_record_identifies_the_reviewed_version(pipeline):
+    job = run_pipeline(pipeline)
+    result = artifacts.get_json(pipeline["jobId"], job["resultKey"])
+    qa = result["qa"]
+    assert qa["passed"] is True
+    assert qa["blockingIssues"] == []
+    assert qa["htmlHash"] == result["htmlHash"]
+    assert qa["assetManifestHash"] == result["assetManifestHash"]
+    assert qa["renderKey"] == result["previewKey"]
+    assert all(c["status"] == "passed" for c in qa["renderChecks"])
+    assert [c["name"] for c in qa["renderChecks"]] == list(
+        review_stage.REQUIRED_RENDER_CHECKS
+    )
+
+
+def test_a_check_that_did_not_run_blocks_approval(pipeline, monkeypatch):
+    def fake_render(html, canvas, scene):
+        return {
+            "native": fake_photo(),
+            "feed": fake_photo(),
+            # No "performed": the checks ran or not, but nothing says they did.
+            "checks": {"problems": [], "textLayers": len(scene["textLayers"]),
+                       "images": 2},
+        }
+
+    monkeypatch.setattr(renderer, "render", fake_render)
+    verdict = _stages_up_to_review(pipeline)
+
+    assert verdict["approved"] is False
+    assert {c["status"] for c in verdict["renderChecks"]} == {"missing"}
+    assert {i["code"] for i in verdict["blockingIssues"]} == {"RENDER_CHECK_MISSING"}
+    with pytest.raises(ReviewBlocked):
+        run_stage(pipeline["jobId"], Stage.FINALIZE)
+
+
+def test_a_failed_check_is_attributed_to_its_own_check(pipeline, monkeypatch):
+    def fake_render(html, canvas, scene):
+        return {
+            "native": fake_photo(),
+            "feed": fake_photo(),
+            "checks": {
+                "problems": [{"code": "TEXT_OVERFLOW", "layerId": "text-1001",
+                              "message": "Text overflowed"}],
+                "textLayers": len(scene["textLayers"]),
+                "images": 2,
+                "performed": list(review_stage.REQUIRED_RENDER_CHECKS),
+            },
+        }
+
+    monkeypatch.setattr(renderer, "render", fake_render)
+    verdict = _stages_up_to_review(pipeline)
+
+    by_name = {c["name"]: c["status"] for c in verdict["renderChecks"]}
+    assert by_name["textFit"] == "failed"
+    assert {n for n, s in by_name.items() if s != "failed"} == (
+        set(review_stage.REQUIRED_RENDER_CHECKS) - {"textFit"}
+    )
+    assert verdict["approved"] is False
+
+
+@pytest.mark.parametrize("field", ["htmlHash", "renderSha256"])
+def test_finalize_refuses_a_version_that_was_not_reviewed(pipeline, field):
+    verdict = _stages_up_to_review(pipeline)
+    review = artifacts.get_json(pipeline["jobId"], verdict["review"])
+    review[field] = "0" * 64
+    artifacts.put_json(verdict["review"], review, overwrite=True)
+
+    with pytest.raises(FinalHashMismatch):
+        run_stage(pipeline["jobId"], Stage.FINALIZE)
+
+
+def test_finalize_fails_closed_on_a_review_with_no_identity(pipeline):
+    verdict = _stages_up_to_review(pipeline)
+    review = artifacts.get_json(pipeline["jobId"], verdict["review"])
+    del review["htmlHash"], review["renderSha256"]
+    artifacts.put_json(verdict["review"], review, overwrite=True)
+
+    with pytest.raises(FinalHashMismatch):
+        run_stage(pipeline["jobId"], Stage.FINALIZE)
+
+
+def test_every_artifact_is_born_temporary(pipeline):
+    _stages_up_to_review(pipeline)
+    tags = pipeline["s3"].tags
+    assert tags
+    assert set(tags.values()) == {"lifecycle=temporary"}
+
+
+def test_a_saved_design_and_its_dependencies_are_retained(pipeline):
+    job = run_pipeline(pipeline)
+    tags = pipeline["s3"].tags
+    produced = job["artifacts"]
+    must_keep = {
+        job["resultKey"],
+        job["requestKey"],
+        produced[Stage.ASSEMBLE]["html"],
+        produced[Stage.ASSEMBLE]["scene"],
+        produced[Stage.RENDER]["native"],
+        produced[Stage.REVIEW]["review"],
+        produced[Stage.CLEAN_PHOTO]["background"],
+        produced[Stage.DECORATION_OVERLAY]["decoration"],
+    }
+    for key in must_keep:
+        assert tags[key] == "lifecycle=retained", key
+
+    # Working artifacts of a finished design still expire.
+    concept = produced[Stage.CONCEPT]["concept"]
+    assert tags[concept] == "lifecycle=temporary"
+    assert "expiresAt" not in job
+
+
+def test_a_failed_job_keeps_its_expiry_and_its_artifacts_stay_temporary(pipeline):
+    _stages_up_to_review(pipeline)
+    jobs.mark_failed(
+        pipeline["jobId"],
+        {"stage": Stage.RENDER, "code": "RENDER_FAILED", "message": "m",
+         "retryable": False},
+    )
+    job = pipeline["table"].items[f"JOB#{pipeline['jobId']}"]
+    assert job["status"] == Status.FAILED
+    assert "expiresAt" in job
+    assert set(pipeline["s3"].tags.values()) == {"lifecycle=temporary"}

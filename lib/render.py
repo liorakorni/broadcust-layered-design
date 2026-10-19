@@ -79,6 +79,10 @@ def render(html, canvas, scene):
     """
     document = _document(html, canvas)
     families = {layer["fontFamily"] for layer in scene["textLayers"]}
+    # Names of the checks that actually completed. REVIEW treats any required
+    # check absent from this list as "missing", never as passing: a check that
+    # silently did not run would otherwise look identical to a clean design.
+    performed = []
 
     with _playwright()() as p:
         browser = p.chromium.launch(args=_LAUNCH_ARGS)
@@ -91,6 +95,7 @@ def render(html, canvas, scene):
             page.set_content(document, wait_until="load")
 
             _wait_for_assets(page)
+            performed.append("imagesDecoded")
 
             missing = _missing_fonts(page, families)
             if missing:
@@ -98,10 +103,13 @@ def render(html, canvas, scene):
                     "The design uses fonts the renderer does not have: "
                     + ", ".join(sorted(missing))
                 )
+            performed.append("fontsResolved")
 
             checks = _inspect(page, canvas)
+            performed.extend(["textFit", "emptyText", "bounds", "uniqueIds"])
             native = page.screenshot(type="png")
             feed = _feed_capture(page, canvas)
+            performed.append("feedCapture")
         except RenderFailed:
             raise
         except FontMissing:
@@ -111,6 +119,7 @@ def render(html, canvas, scene):
         finally:
             browser.close()
 
+    checks["performed"] = performed
     return {"native": native, "feed": feed, "checks": checks}
 
 

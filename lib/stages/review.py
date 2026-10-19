@@ -46,6 +46,45 @@ REVIEW_SCHEMA = {
 }
 
 
+#: Every check REVIEW requires before it may approve. A name missing from
+#: RENDER's `checksPerformed` is reported as "missing", never as passing.
+REQUIRED_RENDER_CHECKS = (
+    "imagesDecoded",
+    "fontsResolved",
+    "textFit",
+    "emptyText",
+    "bounds",
+    "uniqueIds",
+    "feedCapture",
+)
+
+_CHECK_FOR_PROBLEM = {
+    "TEXT_OVERFLOW": "textFit",
+    "EMPTY_TEXT": "emptyText",
+    "OUT_OF_BOUNDS": "bounds",
+    "DUPLICATE_ID": "uniqueIds",
+}
+
+
+def _render_checks(rendered):
+    """Per-check status: passed, failed or missing."""
+    performed = set(rendered.get("checksPerformed") or [])
+    failed = {
+        _CHECK_FOR_PROBLEM.get(problem["code"])
+        for problem in rendered.get("problems", [])
+    }
+    report = []
+    for name in REQUIRED_RENDER_CHECKS:
+        if name not in performed:
+            status = "missing"
+        elif name in failed:
+            status = "failed"
+        else:
+            status = "passed"
+        report.append({"name": name, "status": status})
+    return report
+
+
 def run(job_id, attempt, asset_id=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, Stage.REVIEW)
@@ -71,10 +110,28 @@ def run(job_id, attempt, asset_id=None):
     issues = [issue.model_dump(mode="json") for issue in verdict.blockingIssues]
     issues.extend(_render_problems(produced))
 
+    render_checks = _render_checks(produced.get(Stage.RENDER, {}))
+    for check in render_checks:
+        if check["status"] == "missing":
+            issues.append(
+                {
+                    "code": "RENDER_CHECK_MISSING",
+                    "layerId": None,
+                    "assetId": None,
+                    "message": f"Render check {check['name']!r} did not run.",
+                }
+            )
+
     result = {
         "approved": verdict.passed and not issues,
         "blockingIssues": issues,
         "suggestions": list(verdict.suggestions),
+        "renderChecks": render_checks,
+        # Identity of what was judged, so FINALIZE can prove it ships the same
+        # document and render rather than a later one.
+        "htmlHash": produced[Stage.ASSEMBLE]["htmlHash"],
+        "renderKey": produced[Stage.RENDER]["native"],
+        "renderSha256": artifacts.sha256_hex(native),
         # The workflow's Choice needs to know whether another round is available
         # before it branches, so the rounds already used are reported here.
         "correctionAvailable": (
@@ -153,9 +210,21 @@ def finalize(job_id, attempt, asset_id=None):
     # describes what was asked for before text fitting adjusted it.
     scene = artifacts.get_json(job_id, produced[Stage.ASSEMBLE]["scene"])
 
+    native = artifacts.get_bytes(job_id, produced[Stage.RENDER]["native"])
+
+    # Review judged one specific render of one specific document. If either
+    # differs from what is about to ship, the approval does not apply to it.
+    # `.get` is deliberate: a review written without these fields fails closed.
+    if (
+        review.get("htmlHash") != html_hash
+        or review.get("renderSha256") != artifacts.sha256_hex(native)
+    ):
+        raise FinalHashMismatch(
+            "The delivered HTML or preview is not the version that was reviewed."
+        )
+
     # The preview is the native render published to a durable URL. It joins the
     # manifest so its hash is covered too.
-    native = artifacts.get_bytes(job_id, produced[Stage.RENDER]["native"])
     preview = media.publish(native, job_id=job_id, asset_id="preview")
     manifest = list(produced[Stage.ASSEMBLE]["assets"]) + [
         {
@@ -166,6 +235,21 @@ def finalize(job_id, attempt, asset_id=None):
         }
     ]
     manifest_hash = artifacts.canonical_manifest_hash(manifest)
+
+    result_key = artifacts.artifact_key(job_id, Stage.FINALIZE, attempt, "result.json")
+
+    # The QA record is built here rather than in REVIEW because assetManifestHash
+    # is final only now: it includes the published preview.
+    qa = {
+        "passed": review["approved"],
+        "blockingIssues": review["blockingIssues"],
+        "suggestions": review["suggestions"],
+        "renderChecks": review["renderChecks"],
+        "renderKey": review["renderKey"],
+        "renderSha256": review["renderSha256"],
+        "htmlHash": html_hash,
+        "assetManifestHash": manifest_hash,
+    }
 
     result = {
         "jobId": job_id,
@@ -178,12 +262,35 @@ def finalize(job_id, attempt, asset_id=None):
         ],
         "assetManifestHash": manifest_hash,
         "layerMap": _layer_map(scene),
+        # `preview` predates `previewUrl` and is kept for existing callers.
         "preview": preview["url"],
         "canvas": scene["canvas"],
+        # References to objects the pipeline already stores. Compact transports
+        # return these instead of the HTML itself.
+        "resultKey": result_key,
+        "htmlKey": html_key,
+        "previewKey": produced[Stage.RENDER]["native"],
+        "previewUrl": preview["url"],
+        "reviewKey": produced[Stage.REVIEW]["review"],
+        "qa": qa,
     }
 
-    key = artifacts.artifact_key(job_id, Stage.FINALIZE, attempt, "result.json")
-    stored = artifacts.put_json(key, result)
+    stored = artifacts.put_json(result_key, result)
+
+    # A saved design must outlive the temporary-artifact expiry. Retag before
+    # marking success so a job is never SUCCEEDED with expiring dependencies.
+    artifacts.retain(
+        job_id,
+        {
+            html_key,
+            produced[Stage.ASSEMBLE]["scene"],
+            produced[Stage.RENDER]["native"],
+            produced[Stage.REVIEW]["review"],
+            job["requestKey"],
+            stored["key"],
+            *[entry["key"] for entry in manifest],
+        },
+    )
 
     # Only now is the job complete: every artifact above is durable.
     jobs.mark_succeeded(job_id, stored["key"], html_hash, manifest_hash)

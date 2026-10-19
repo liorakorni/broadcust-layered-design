@@ -26,7 +26,8 @@ from botocore.exceptions import ClientError
 import conf
 from lib.errors import IdempotencyConflict, JobNotFound, Status, Unauthorized
 
-#: Jobs are diagnostic after completion; artifacts carry the real output.
+#: Failed and in-flight jobs expire after this. A SUCCEEDED job is a saved design
+#: and has its expiry removed by `mark_succeeded`.
 JOB_TTL_DAYS = 30
 
 _table = None
@@ -259,12 +260,17 @@ def mark_succeeded(job_id, result_key, html_hash, manifest_hash):
 
     Called only after every final artifact is durable and the hashes match
     (SPEC section 4).
+
+    Removes `expiresAt`: a saved design must stay retrievable by jobId after the
+    30-day window that applies to diagnostic and failed jobs. Without this the
+    status call would answer JOB_NOT_FOUND for a design whose files still exist.
     """
     _tbl().update_item(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression=(
             "SET #s = :ok, resultKey = :rk, htmlHash = :hh, "
-            "assetManifestHash = :mh, stage = :stage, updatedAt = :now"
+            "assetManifestHash = :mh, stage = :stage, updatedAt = :now "
+            "REMOVE expiresAt"
         ),
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={

@@ -146,6 +146,7 @@ def render(job_id, attempt, asset_id=None):
         "native": native["key"],
         "feed": feed["key"],
         "problems": checks["problems"],
+        "checksPerformed": checks.get("performed", []),
     }
     jobs.record_artifacts(job_id, Stage.RENDER, attempt, out)
     return out
