@@ -63,6 +63,50 @@ Stable logical names used across stages:
 | `REVIEW` | `review.json` | Strict-JSON review verdict |
 | `FINALIZE` | `result.json` | Completed result per SPEC section 2.5 |
 
+### Retention tags
+
+Every artifact is written with the S3 tag `lifecycle=temporary`. The bucket's
+lifecycle rule expires only objects carrying that tag, after 30 days.
+
+When a job succeeds, FINALIZE retags the objects that make up the saved design
+`lifecycle=retained` (`lib.artifacts.retain`), before the job is marked
+`SUCCEEDED`:
+
+- `result.json`, the delivered `design.html`, ASSEMBLE's `scene.json`
+- the reviewed `native.png` and `review.json`
+- the canonical `request.json`
+- the source object behind every entry in the asset manifest, since the manifest
+  hash covers those keys
+
+`mark_succeeded` also removes the job record's `expiresAt`. A failed job retags
+nothing and keeps its expiry, so its artifacts and record expire after 30 days.
+The retained set is "excluded from automatic deletion"; it is not copied to
+separate storage.
+
+The tag is applied on write, so `s3:PutObjectTagging` is required by every role
+that writes artifacts.
+
+### Requester decisions on 7.5
+
+SPEC 7.5's `final/` key paths are illustrative. Decisions:
+
+1. **Keys.** Keep the `<stage>/<attempt>` structure and the combined `result.json`.
+   Return `resultKey`; return `htmlKey`, `previewKey` and `reviewKey` for objects
+   that exist. Do not return `layersKey` or `qaKey`, and create no files merely to
+   match the example paths. QA is embedded in `result.json` as `qa` and is also
+   referenced through `reviewKey`.
+2. **Two response modes.** Bedrock actions get compact references and hashes. The
+   authenticated direct call gets the complete result. The backend therefore needs
+   no S3 access. Ownership checks stay mandatory in both.
+3. **Preview.** `previewKey` is an S3 key (the reviewed native render);
+   `previewUrl` is the Cloudinary URL. Unavailable fields are omitted.
+4. **Retention.** 30 days for temporary artifacts; saved designs and their
+   dependencies are excluded from automatic deletion (see Retention tags).
+5. **QA.** `qa` carries `passed`, blocking issues, suggestions, render-check
+   results, the reviewed render's identifier (`renderKey`, `renderSha256`),
+   `htmlHash` and `assetManifestHash`. Approval needs passing checks and zero
+   blocking issues; a check that did not run is reported `missing` and blocks.
+
 ## 4. Error shape
 
 Identical for API rejections, stage failures and failed-job status:

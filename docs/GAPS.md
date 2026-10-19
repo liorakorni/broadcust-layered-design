@@ -204,3 +204,59 @@ rather than a defect in the code.
 **To close.** Decide which the spec means: a per-job bound on paid repair calls
 (current reading, cheap, fragile), or a per-attempt bound with a per-job ceiling
 (more forgiving, more expensive). Needs the requester's input.
+
+---
+
+## 8. Agent session ownership trusts every action group on the agent
+
+**State.** An agent call has no trusted caller context. Ownership comes from the
+`ownerScope` session attribute, which the application backend sets in
+`InvokeAgent`. The model cannot write session attributes, and `ownerScope` is not
+an Action Group parameter, so a prompt cannot claim another tenant's jobs.
+
+**Why it matters.** An action group Lambda can return modified session
+attributes, and the agent carries them forward. Every action group attached to
+the agent is therefore trusted not to rewrite `ownerScope`. This service returns
+them unmodified (`lib.bedrock.envelope`); it cannot vouch for the others.
+
+**To close.** Attach only action groups you control, or replace the attribute
+with a value the Lambda can verify, such as a signed token with a rotated key.
+
+The same attribute has to be set by `broadcust-bedrock-api`, which does not do so
+yet. Until it does, every agent call fails closed with `UNAUTHORIZED`.
+
+---
+
+## 9. No role is granted direct invoke on the API function
+
+**State.** The backend is meant to read complete results by invoking the API
+function directly, and `trustedCallerContext` is trusted only because IAM limits
+who can do that. No backend role ARN has been supplied, so the deploy grants
+`lambda:InvokeFunction` to nothing but the Bedrock agent (when configured).
+
+**Why it matters.** Until a role is granted, only account administrators can use
+the direct path. Granting it too broadly is worse than not granting it: any
+principal that can invoke can claim any `ownerScope`.
+
+**To close.** Get the backend's execution role ARN and add a scoped
+`AWS::Lambda::Permission` or a policy on that role.
+
+---
+
+## 10. Retention is an exclusion from deletion, not a durable copy
+
+**State.** Saved designs and their dependencies are tagged `lifecycle=retained`
+and the job record loses its expiry. They stay in the artifact bucket, which is
+the same bucket as the temporary files.
+
+Three limits:
+
+- Objects written before the tagging shipped carry no tag, so the new lifecycle
+  rule never expires them. Delete old dev jobs by hand if that matters.
+- The idempotency claim record still expires at 30 days. After that, reusing a
+  `requestId` starts a new, paid job. The saved design stays retrievable by its
+  `jobId`.
+- The bucket has no versioning or replication, so a saved design has one copy.
+
+**To close.** If saved designs need stronger durability, copy them to dedicated
+storage at FINALIZE and drop the tags.

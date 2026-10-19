@@ -208,7 +208,29 @@ the photo and text remain intact.
 pixels from the top-left, its stacking order, and for text its `role` and
 `contentKey`. Useful for building an editing UI.
 
-**`preview`** is the rendered design as a PNG, for thumbnails.
+**`preview`** is the rendered design as a PNG, for thumbnails. `previewUrl` is the
+same URL under its newer name; `preview` is kept for existing callers.
+
+**References to stored objects.** `resultKey`, `htmlKey`, `previewKey` and
+`reviewKey` are S3 keys in the artifact bucket for objects the service really
+stores: this result, the delivered HTML, the reviewed render (a PNG) and the
+review verdict. They are references, not a way to fetch the design — the bucket
+is private, and a caller without bucket access gets the same content from the
+`html`, `layerMap` and `qa` fields of this response.
+
+**`qa`** is the review record for the version you received:
+
+| Field | Meaning |
+|---|---|
+| `passed` | `true` only when every technical check passed and there are zero blocking issues. |
+| `blockingIssues`, `suggestions` | What review found. A delivered design has no blocking issues. |
+| `renderChecks` | One entry per required render check, each `passed`, `failed` or `missing`. |
+| `renderKey`, `renderSha256` | Identifier and hash of the exact render that was reviewed. |
+| `htmlHash`, `assetManifestHash` | The version the review applies to. |
+
+A check that did not run is reported `missing` and blocks approval; it is never
+counted as passing. FINALIZE refuses to deliver a document or render whose hash
+differs from the one that was reviewed.
 
 **`htmlHash` / `assetManifestHash`** let you verify nothing changed in transit.
 `SUCCEEDED` is only set after every asset is durable and these hashes match.
@@ -323,16 +345,24 @@ than being delivered.
 | Correction rounds | 2 |
 | Overlay repairs | 2 |
 | Job duration | 30 minutes |
-| Job and artifact retention | 30 days; delivered assets on the media CDN persist |
+| Retention | A **saved** (SUCCEEDED) design is kept. Working artifacts and failed jobs expire after 30 days |
 
 Designs are generated at the nearest supported aspect (1024×1024, 1024×1536 or
 1536×1024) and resampled to your exact canvas.
 
-**Store the result when you receive it.** After 30 days the job record and its
-stored HTML both expire, and `getLayeredDesignStatus` will return
-`JOB_NOT_FOUND` for a design that previously succeeded. The published asset and
-preview URLs keep working, because those live on the media CDN rather than in
-the job's storage — but the `html` is only retrievable while the job is.
+**What is kept, and what is not.** A job that reaches `SUCCEEDED` keeps its job
+record, its `result.json`, the delivered HTML, the reviewed render, the review
+verdict, the request, and the source image behind every asset. None of these are
+deleted automatically, so `getLayeredDesignStatus` keeps answering for a saved
+design. Delivered assets and the preview also live on the media CDN.
+
+Everything else is temporary and expires after 30 days: the concept, earlier
+attempts, repair images and the other working files of a finished design. A
+**failed** job keeps nothing — its record and all its artifacts expire.
+
+Retention here means "excluded from automatic deletion", not a copy into separate
+storage. Files written before this was introduced carry no expiry tag, so they are
+never auto-deleted; the job records of those older jobs still expire at 30 days.
 
 ---
 
@@ -350,14 +380,84 @@ aws lambda invoke \
 
 **There is deliberately no HTTP endpoint.** No Function URL and no API Gateway,
 unlike `openai-image-api`. The caller is an authenticated application that
-invokes the Lambda directly, which is what SPEC section 7 describes and what
-keeps paid image generation off a publicly reachable URL.
+invokes the Lambda directly, which keeps paid image generation off a publicly
+reachable URL. A Bedrock agent reaches the same function through its Action
+Group (see below), not through HTTP.
 
 If you do put HTTP in front of it, `ownerScope` must be derived from the
 authenticated session there. It is the only thing separating one tenant's jobs
 from another's, so a request body that can set it is a request body that can
 read someone else's designs.
 
-The optional Bedrock Action Group adapter from SPEC section 7 is **not
-implemented**: the handler dispatches on an explicit `operation` field and does
-not read Bedrock `parameters` or emit its response envelope.
+### Direct calls are authenticated by IAM, not by the payload
+
+`trustedCallerContext` is accepted because only principals allowed
+`lambda:InvokeFunction` on the API function can send it. Nothing in the handler
+verifies it. Grant that permission only to the application backend, and have the
+backend derive `ownerScope` from its own authenticated session.
+
+## Bedrock Action Group
+
+The same Lambda serves a Bedrock agent (SPEC section 7). The handler recognises an
+agent event by `messageVersion`, `actionGroup` and `function`, and answers in the
+agent response envelope. Direct calls keep the bare format above; both paths run
+the same validation, authorization and service code.
+
+The two functions are defined in [`bedrock/action-group.json`](../bedrock/action-group.json):
+
+| Function | Parameter | Returns |
+|---|---|---|
+| `runLayeredDesign` | `requestJson` (string) | `{success, accepted, jobId, status: "QUEUED"}` |
+| `getLayeredDesignStatus` | `jobId` (string) | Status and stage, or a compact result |
+
+Starting a job confirms acceptance only. Do not wait for the design inside the
+agent turn; the backend keeps the `jobId` and reads the terminal status itself.
+
+**Compact result.** On `SUCCEEDED` the agent receives references and hashes only:
+
+```json
+{
+  "success": true,
+  "jobId": "9f2c1a7b…",
+  "status": "SUCCEEDED",
+  "result": {
+    "resultKey": "layered-design/9f2c1a7b…/FINALIZE/1/result.json",
+    "htmlKey": "layered-design/9f2c1a7b…/ASSEMBLE/1/design.html",
+    "previewKey": "layered-design/9f2c1a7b…/RENDER/1/native.png",
+    "previewUrl": "https://res.cloudinary.com/…/preview.png",
+    "reviewKey": "layered-design/9f2c1a7b…/REVIEW/1/review.json",
+    "htmlHash": "…",
+    "assetManifestHash": "…"
+  }
+}
+```
+
+Fields that are unavailable are omitted. There is no full HTML, layer map, asset
+list or QA detail in an agent response. The backend gets the complete result —
+HTML, `layerMap`, `assets`, `qa` — by calling `getLayeredDesignStatus` **directly**
+on the Lambda. That is why the backend never needs read access to the bucket.
+
+A failed design job answers `success: true` with `status: "FAILED"` and its stage
+error. Invalid or unauthorized requests answer `success: false` and mark the
+envelope `responseState: "FAILURE"`.
+
+### Job ownership for agent calls
+
+An agent event carries no trusted caller context, so ownership comes from the
+session attribute `ownerScope`. The application backend sets it in its
+`InvokeAgent` call; the model cannot write session attributes, and `ownerScope` is
+never an Action Group parameter. A call without it fails with `UNAUTHORIZED`.
+`promptSessionAttributes` are never used for identity.
+
+**The backend must send the same value as `trustedCallerContext.ownerScope` on its
+direct calls that it set as the `ownerScope` session attribute.** The two are
+hashed to the same scope; any mismatch makes jobs started by the agent invisible
+to the backend.
+
+### Attaching the agent
+
+Add the functions from `bedrock/action-group.json` to the agent's Action Group,
+point it at `broadcust-layered-design-<stage>-api`, and put the agent's ARN in
+`bedrock_agent_arn` in `config.<stage>.json`. The deploy then adds a Lambda
+permission for `bedrock.amazonaws.com` limited to this account and that agent. An
+empty value adds no permission.

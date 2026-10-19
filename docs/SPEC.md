@@ -332,29 +332,181 @@ Owner scope comes from authenticated caller context, not a model-supplied tenant
 
 Use least-privilege IAM: API gets job/idempotency access and StartExecution for this workflow; stage gets job-scoped artifacts, configured model/provider secrets and stable-media publishing; workflow can invoke stage; application can read authorized results. Scope model profiles/destination permissions to actual configuration. Do not log secrets, full base64, signed URL query strings or routine customer contact content. Log jobId/stage/attempt/duration/error/provider request ID.
 
-## 7. Optional Bedrock agent adapter
+## 7. Required Bedrock Agent Integration
 
-Core service works without Bedrock. If exposing an Action Group, add functions runLayeredDesign(requestJson:string) and getLayeredDesignStatus(jobId:string), with descriptions under 200 characters. requestJson serializes the public start request. Read event.parameters name/value pairs. Use the standard response envelope:
+The service must support invocation by an Amazon Bedrock Agent through an Action Group. This integration is a mandatory part of the implementation.
 
-```js
+Implement the integration in the broadcust-layered-design-api Lambda. Keep the design-processing logic separate from the Bedrock event and response handling.
+
+### 7.1 Action Group Functions
+
+Expose these two functions:
+
+| Function | Required parameter | Purpose |
+| --- | --- | --- |
+| runLayeredDesign | requestJson: string | Start an asynchronous design job. |
+| getLayeredDesignStatus | jobId: string | Retrieve job progress or completion status. |
+
+requestJson contains the serialized start request defined in this specification.
+
+### 7.2 Incoming Bedrock Events
+
+Read the function name from event.function.
+
+Read parameters from event.parameters, where each parameter contains name and value.
+
+Example start event:
+
+```json
 {
-  messageVersion: '1.0',
-  response: {
-    actionGroup: event.actionGroup,
-    function: event.function,
-    functionResponse: {
-      responseBody: { TEXT: { body: JSON.stringify(result) } }
-      // Add responseState: 'FAILURE' only for result.success === false.
+  "messageVersion": "1.0",
+  "actionGroup": "LayeredDesign",
+  "function": "runLayeredDesign",
+  "parameters": [
+    {
+      "name": "requestJson",
+      "type": "string",
+      "value": "{\"requestId\":\"example-001\",\"brief\":{\"post\":\"Marketing content\"},\"referenceImageUrl\":\"https://example.com/reference.png\"}"
     }
-  },
-  sessionAttributes: event.sessionAttributes ?? {},
-  promptSessionAttributes: event.promptSessionAttributes ?? {}
+  ],
+  "sessionAttributes": {},
+  "promptSessionAttributes": {}
 }
 ```
 
-Compact status responses expose result pointers/hashes rather than full HTML. Start responses return accepted/jobId only. No API Gateway statusCode wrapper for Bedrock events. Add Bedrock Lambda invoke permission scoped to the configured source account/agent. Do not require a specific agent ID in the core implementation.
+Parse requestJson as JSON and validate it against the service's start-request schema. Reject malformed JSON, missing parameters and unsupported function names.
 
-For direct trusted Lambda tests accept `{operation:"runLayeredDesign", request:{...}}` or `{operation:"getLayeredDesignStatus", jobId:"..."}`. Require an explicit operation. Trusted identity must be resolved by the deployment adapter; a caller cannot establish ownership merely by putting a tenantId in the request.
+The example URL is illustrative and must be replaced with an actual authorized image URL during testing.
+
+### 7.3 Bedrock Response Format
+
+Return results using this envelope:
+
+```js
+function respondToBedrock(event, result) {
+  const functionResponse = {
+    responseBody: {
+      TEXT: {
+        body: JSON.stringify(result)
+      }
+    }
+  };
+
+  if (result.success === false) {
+    functionResponse.responseState = "FAILURE";
+  }
+
+  return {
+    messageVersion: "1.0",
+    response: {
+      actionGroup: event.actionGroup,
+      function: event.function,
+      functionResponse
+    },
+    sessionAttributes: event.sessionAttributes ?? {},
+    promptSessionAttributes:
+      event.promptSessionAttributes ?? {}
+  };
+}
+```
+
+Preserve the incoming action-group name, function name and session attributes. Do not use an API Gateway statusCode/body response wrapper for Bedrock invocations.
+
+### 7.4 Starting a Job
+
+runLayeredDesign must return promptly after durable job acceptance and workflow-start acknowledgement:
+
+```json
+{
+  "success": true,
+  "accepted": true,
+  "jobId": "generated-job-id",
+  "status": "QUEUED"
+}
+```
+
+Wrap this result in the Bedrock response envelope.
+
+This response confirms acceptance only. Do not wait for design completion, return final HTML or report that the design is finished.
+
+### 7.5 Reading Job Status
+
+getLayeredDesignStatus receives the jobId returned by the start operation.
+
+While processing, return the current status and stage.
+
+On completion, return a compact result containing authorized artifact references and validation hashes:
+
+```json
+{
+  "success": true,
+  "jobId": "generated-job-id",
+  "status": "SUCCEEDED",
+  "result": {
+    "htmlKey": "layered-design/generated-job-id/final/design.html",
+    "previewKey": "layered-design/generated-job-id/final/preview.png",
+    "layersKey": "layered-design/generated-job-id/final/layers.json",
+    "qaKey": "layered-design/generated-job-id/final/qa.json",
+    "htmlHash": "sha256-value",
+    "assetManifestHash": "sha256-value"
+  }
+}
+```
+
+Do not include full HTML, Base64 images or large documents in Bedrock action responses. The authenticated application backend retrieves the final artifacts and delivers the complete result to the client.
+
+A failed design job returns success: true with status: "FAILED" and its stage error when the status lookup itself succeeds. Invalid or unauthorized requests return success: false.
+
+### 7.6 Asynchronous Completion
+
+The application backend must retain the returned jobId and obtain the terminal job status through its background-job mechanism.
+
+Do not implement a prolonged polling loop inside the agent invocation. Bedrock does not automatically resume the original agent turn when the background design job finishes.
+
+The integration is complete only when the application can retrieve and deliver the reviewed HTML after SUCCEEDED, and report the stage error after FAILED.
+
+### 7.7 Direct Invocation for Testing
+
+Also support explicit direct Lambda invocations:
+
+```json
+{
+  "operation": "runLayeredDesign",
+  "request": {
+    "requestId": "example-001",
+    "brief": {
+      "post": "Marketing content"
+    },
+    "referenceImageUrl": "https://example.com/reference.png"
+  }
+}
+```
+
+```json
+{
+  "operation": "getLayeredDesignStatus",
+  "jobId": "generated-job-id"
+}
+```
+
+Direct invocations return the operation result without the Bedrock envelope. Both invocation paths must use the same validation, authorization and service logic.
+
+### 7.8 Configuration and Permissions
+
+Provide:
+
+- The Action Group function definitions.
+- The Lambda handler and its Bedrock event adapter.
+- Lambda invocation permission for bedrock.amazonaws.com, restricted to the configured AWS account and agent ARN.
+- A trusted mechanism for associating agent sessions with job ownership.
+- Tests for both functions, response envelopes, malformed requests and unauthorized job access.
+
+Keep function and parameter descriptions within the target configuration's 200-character limit. Do not hardcode a particular agent ID into the core service logic.
+
+> **Requester clarification on 7.5 (resolved).** The `final/` key paths above are
+> illustrative, not required filenames. The service keeps its `<stage>/<attempt>`
+> storage and the combined `result.json`, and returns references to artifacts it
+> actually produces. See `docs/CONTRACTS.md`, "Requester decisions on 7.5".
 
 ## 8. Implementation files and configuration
 
