@@ -19,7 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import conf
-from lib import artifacts, jobs
+from lib import artifacts, bedrock, jobs
 from lib.errors import (
     Code,
     InvalidRequest,
@@ -45,36 +45,65 @@ def _states():
 
 
 def handler(event, context):
-    """Dispatch on an explicit operation.
+    """Dispatch a Bedrock Action Group call or an explicit direct operation.
 
-    SPEC section 7 requires the operation to be explicit: guessing it from the
-    shape of the payload would make a malformed start request look like a status
-    lookup.
+    SPEC section 7.7: both paths run the same validation, authorization and
+    service logic. Only the envelope and the result projection differ.
     """
+    # Decided before the try so error responses are enveloped too; a bare dict
+    # in reply to an agent call is unreadable to the agent.
+    from_agent = bedrock.is_bedrock_event(event)
     try:
         conf.validate(conf.API_REQUIRED)
-        operation = event.get("operation")
-        if operation == "runLayeredDesign":
-            return run_layered_design(
-                event.get("request"), event.get("trustedCallerContext")
-            )
-        if operation == "getLayeredDesignStatus":
-            return get_layered_design_status(
-                event.get("jobId"), event.get("trustedCallerContext")
-            )
-        raise InvalidRequest(
-            "Missing or unknown operation; expected runLayeredDesign or "
-            "getLayeredDesignStatus."
-        )
+        result = _dispatch_agent(event) if from_agent else _dispatch_direct(event)
     except LayeredDesignError as exc:
-        return {"success": False, "accepted": False, "error": exc.to_dict()}
+        result = {"success": False, "accepted": False, "error": exc.to_dict()}
     except Exception:
         log.exception("unhandled api error")
-        return {
+        result = {
             "success": False,
             "accepted": False,
             "error": as_error_dict(None, default_stage=Stage.ACCEPT_REQUEST),
         }
+    return bedrock.envelope(event, result) if from_agent else result
+
+
+def _dispatch_direct(event):
+    """SPEC section 7 requires the operation to be explicit: guessing it from
+    the shape of the payload would make a malformed start request look like a
+    status lookup.
+
+    `trustedCallerContext` is trusted only because IAM limits who may invoke
+    this function directly; nothing here authenticates it.
+    """
+    if not isinstance(event, dict):
+        raise InvalidRequest("Event must be a JSON object.")
+    operation = event.get("operation")
+    if operation == "runLayeredDesign":
+        return run_layered_design(
+            event.get("request"), event.get("trustedCallerContext")
+        )
+    if operation == "getLayeredDesignStatus":
+        return get_layered_design_status(
+            event.get("jobId"), event.get("trustedCallerContext")
+        )
+    raise InvalidRequest(
+        "Missing or unknown operation; expected runLayeredDesign or "
+        "getLayeredDesignStatus."
+    )
+
+
+def _dispatch_agent(event):
+    function = event.get("function")
+    params = bedrock.parameters(event)
+    caller = bedrock.caller_context(event)
+    if function == bedrock.RUN:
+        payload = bedrock.parse_request_json(bedrock.required(params, "requestJson"))
+        return run_layered_design(payload, caller)
+    if function == bedrock.STATUS:
+        response = get_layered_design_status(bedrock.required(params, "jobId"), caller)
+        return bedrock.compact_result(response)
+    raise InvalidRequest(f"Unsupported function {function!r}.")
 
 
 def run_layered_design(payload, caller_context):

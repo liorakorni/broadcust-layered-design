@@ -1,4 +1,5 @@
 {
   "openai_api_key": "sk-...",
-  "cloudinary_secret_arn": "arn:aws:secretsmanager:us-east-1:816069163425:secret:Cloudinery-XXXXXX"
+  "cloudinary_secret_arn": "arn:aws:secretsmanager:us-east-1:816069163425:secret:Cloudinery-XXXXXX",
+  "bedrock_agent_arn": "arn:aws:bedrock:us-east-1:816069163425:agent/XXXXXXXXXX"
 }

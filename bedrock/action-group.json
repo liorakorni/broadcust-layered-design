@@ -1,0 +1,26 @@
+{
+  "functions": [
+    {
+      "name": "runLayeredDesign",
+      "description": "Start an asynchronous layered marketing design job. Returns a jobId immediately; the design is not finished when this returns. Do not wait; check later with getLayeredDesignStatus.",
+      "parameters": {
+        "requestJson": {
+          "type": "string",
+          "required": true,
+          "description": "Serialized JSON start request: requestId, brief, referenceImageUrl and optional canvas and assets fields."
+        }
+      }
+    },
+    {
+      "name": "getLayeredDesignStatus",
+      "description": "Retrieve progress or artifact references for a layered design job. Returns status QUEUED, RUNNING, SUCCEEDED or FAILED with the current stage.",
+      "parameters": {
+        "jobId": {
+          "type": "string",
+          "required": true,
+          "description": "The jobId returned by runLayeredDesign."
+        }
+      }
+    }
+  ]
+}

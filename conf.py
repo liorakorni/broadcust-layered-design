@@ -29,6 +29,14 @@ WORKFLOW_ARN = os.environ.get("WORKFLOW_ARN", "")
 STAGE_FUNCTION_NAME = os.environ.get("STAGE_FUNCTION_NAME", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
+# --- Bedrock agent integration (SPEC section 7) ------------------------------
+# The session attribute carrying job ownership for agent calls. The application
+# backend sets it in InvokeAgent; it is never an Action Group parameter. The
+# agent ARN is deliberately absent: only CloudFormation references it.
+BEDROCK_OWNER_SCOPE_ATTRIBUTE = os.environ.get(
+    "BEDROCK_OWNER_SCOPE_ATTRIBUTE", "ownerScope"
+)
+
 # --- Providers ---------------------------------------------------------------
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
