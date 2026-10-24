@@ -88,6 +88,7 @@ _COMPACT_FIELDS = (
     "previewUrl",
     "qaKey",
     "designFreedom",
+    "reviewStrictness",
     "htmlHash",
     "assetManifestHash",
 )

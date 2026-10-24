@@ -7,7 +7,7 @@ Image 2: the generated concept.
 CREATIVE POLICY (designFreedom {design_freedom}, mode {mode}):
 {policy_instruction}
 
-The concept MUST preserve:
+The concept MUST preserve (layout and visual styling only, never subject matter):
 {must_preserve}
 
 The concept MAY change:
@@ -16,34 +16,52 @@ The concept MAY change:
 Always-permitted adaptations. These are documented exceptions, never violations:
 {documented_exceptions}
 
+{severity_block}
+
 Reference anchors recorded earlier (normalized boxes, 0..1 from the top-left):
 {reference_anchors}
 
-APPROVED COPY (the only legitimate text; the reference's own text is not target
-content):
+MANDATORY APPROVED TEXT (the only legitimate text; the reference's own text is not
+target content):
 {copy_block}
 
-How to review:
-- For every item under "must preserve", add one check naming the anchor it is
-  about (anchorId, or null when it concerns the whole layout), the feature, the
-  expected policy, what you observed in the concept, and whether it passed.
-  Compare normalized anchor positions and relative scale. Do NOT report a
-  similarity percentage.
-- Raise a blocking issue with category "layoutAdherence" only for a violation of
-  the policy above that is NOT one of the always-permitted adaptations.
-- Raise blocking issues with category "content", "readability" or "composition"
-  at EVERY setting for: invented facts, wrong or missing approved copy,
-  unreadable text, or a poor composition.
-- Do not raise an issue because the concept differs from the reference in a way
-  the policy says it may change.
-- List the always-permitted adaptations you actually saw under
-  documentedExceptions.
-- Each blocking issue message must be a targeted repair instruction that a
-  designer could act on, for example which element moved and where it belongs.
-- Set constraintConflict.conflicted to true ONLY if the mandatory content
-  genuinely cannot fit the preserved layout even with localized fitting, and
-  give a concise reason. Otherwise set it to false with a null reason.
+PLANNED POSITIONS for that text (normalized boxes):
+{placement_block}
 
-Return strict JSON: passed, mode (echo "{mode}"), checks, documentedExceptions,
-blockingIssues (each with code, category, message), suggestions and
-constraintConflict.
+How to review:
+1. copyChecks: for EVERY contentKey in the mandatory approved text, one entry:
+   present (the text appears in the concept), correct (it is spelled exactly as
+   approved, no extra or altered words) and readable (legible at normal size, not
+   hidden or cropped), with what you observed. Read the actual pixels. Never
+   assume a line is there because the others are. Report every key exactly once.
+2. checks: for every item under "must preserve", one check naming the anchor it
+   concerns (anchorId, or null for the whole layout), the feature, the expected
+   policy, what you observed, and whether it passed. Compare normalized
+   positions and relative scale. Do NOT report a similarity percentage.
+3. issues: report every difference that matters, each as one entry with:
+   - code: a short stable UPPER_SNAKE name;
+   - category: "visual", "content" or "technical", per the review policy above;
+   - severity: "warning" or "blocking", per the review policy above;
+   - affected: the element or constraint concerned (a contentKey for copy);
+   - impact: what this difference actually DOES to the design. Describe the
+     effect on the composition, hierarchy, emphasis, usability or text, not
+     merely that it differs from the reference;
+   - suggestion: the targeted correction, only when one is needed (null for a
+     warning that needs none);
+   - region: the normalized box where the problem is, or null when it concerns
+     the whole design. For missing or wrong copy use the planned position.
+4. Judge what a difference does, not how different it is. A different photograph,
+   a slightly different position, an extra subtle ornament or a localized
+   typography adjustment is a WARNING unless you can state a material harm to the
+   composition. Do not require any person, pose, object, equipment or exact
+   subject bounds because the reference shows them: the brief decides the image
+   content. Never raise "blocking" for a difference you cannot tie to a harm.
+5. Do not raise anything for a difference the policy says may change.
+6. List the always-permitted adaptations you actually saw under documentedExceptions.
+7. Set constraintConflict.conflicted to true ONLY if the mandatory content
+   genuinely cannot fit the preserved layout even with localized fitting, and
+   give a concise reason. Otherwise set it to false with a null reason.
+
+Return strict JSON: mode (echo "{mode}"), checks, copyChecks, documentedExceptions,
+issues, suggestions and constraintConflict. Do not return a pass/fail flag: the
+service decides that from what you report.

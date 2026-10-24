@@ -37,6 +37,17 @@ If the API rejects one, report it — never substitute a model from memory.
    the mask keeps the visible photograph's framing, which an unmasked edit does not.
    An overlay repair regenerates from the concept with the located failure appended;
    it never edits the rejected overlay (editing a transparent PNG inverted its alpha).
+3a. **A concept correction edits a stored candidate; it never regenerates from the
+   reference.** Attempt 1 generates; every later CONCEPT attempt follows a
+   `correction-plan.json`: base = the chosen candidate's pixels, complete approved-copy
+   list, blocking issues only (never warnings), planned copy positions, explicit
+   preserve rules, a region mask where the issue can be located, and the base restored
+   outside the mask. A candidate is eligible only with all mandatory copy present, all
+   required checks run and no blocking issue; correction stops at the first eligible
+   one; at exhaustion the best *eligible* stored candidate is selected (never the latest
+   by default, never one with missing mandatory content). Every stage records the
+   `conceptSha256` it used and FINALIZE checks it. Policy/analysis are versioned
+   (`POLICY_VERSION`): never reuse an artifact from another version.
 4. **All geometry is pixels from the canvas top-left.** `fontSize` is px; `lineHeight`
    is a dimensionless multiplier. Never mix normalized 0-1 coordinates with pixels. Any
    vision call that returns coordinates passes `detail="original"`; anything else

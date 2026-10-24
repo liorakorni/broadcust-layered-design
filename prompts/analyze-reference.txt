@@ -9,6 +9,9 @@ REFERENCE POLICY (designFreedom {design_freedom}, mode {mode}):
 What must be preserved under this policy:
 {must_preserve}
 
+Reference boundary (binding on how you describe the image):
+{content_boundary}
+
 TARGET COPY (the new business's text; the reference's own text is NOT this):
 {copy_block}
 
@@ -18,6 +21,15 @@ Report, from the pixels you can see:
   (x, y, width, height, each a fraction of the image between 0 and 1, measured
   from the top-left), relativeScale (the fraction of the canvas area it covers,
   between 0 and 1) and confidence (between 0 and 1).
+- copyPlacements: for EVERY contentKey in the target copy, exactly one planned
+  position: the normalized box where that text should sit in the new design, and
+  a short basis. Use the reference's own text zones where one corresponds (the
+  headline zone for the title, the paragraph zone for body text, the button for
+  the call to action). A copy item with no counterpart in the reference, such as
+  a business name, still needs a position: choose free space in the text area
+  that does not overlap another planned item or crowd the dominant image region,
+  and say so in the basis. These positions are reused unchanged for every later
+  attempt and correction, so choose them to be stable and uncluttered.
 - hierarchy: the reading order of importance, most dominant first.
 - overlaps: which elements overlap which, and which is on top.
 - alignment: how the elements are aligned.
@@ -28,6 +40,11 @@ Report, from the pixels you can see:
 - notes: anything else a designer adapting this image should know.
 
 Rules:
+- Make every anchor id and description content-neutral. Name a region by its
+  position, size and visual role (for example "dominant_image_right",
+  "text_backing_panel_left", "accent_capsule"), never by what it depicts. Do not
+  use a person, a pose, equipment or any object category in an id, kind or note.
+  The target brief, not this reference, decides what the image shows.
 - Describe geometry from what is visible. Do not guess an exact font name from
   pixels; describe its character (for example "heavy geometric sans") instead.
 - If the target canvas has a different aspect ratio from the reference, report

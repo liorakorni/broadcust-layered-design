@@ -108,8 +108,12 @@ The `stage` is real progress, not a percentage. A normal run passes through:
 
 `PREFLIGHT, PREPARE_COPY, ANALYZE_REFERENCE, CONCEPT, REVIEW_CONCEPT, EXTRACT_SCENE, CLEAN_PHOTO, DECORATION_OVERLAY, VALIDATE_ASSETS, ASSEMBLE, RENDER, REVIEW`
 
-If the concept review rejects the concept you will see `CONCEPT` and
-`REVIEW_CONCEPT` repeat, at most twice. That is the concept-repair loop working.
+If the concept review finds a blocking issue you will see `CONCEPT` and
+`REVIEW_CONCEPT` repeat, at most twice. That is the concept-correction loop working:
+each repeat edits the best stored candidate (it does not regenerate from the
+reference), and it stops as soon as a candidate is eligible. Warnings alone never
+trigger a repeat. If the rounds run out, the best eligible stored candidate is
+selected, or the job fails with `REQUIRED_COPY_MISSING` or `REFERENCE_ADHERENCE_FAILED`.
 
 ## Test 3: what to check in a SUCCEEDED result
 
@@ -118,7 +122,10 @@ If the concept review rejects the concept you will see `CONCEPT` and
 | Check | Expect |
 |---|---|
 | `result.designFreedom` | The value you sent (0 when omitted). |
-| `result.policyVersion` | `"1.0"` |
+| `result.policyVersion` | `"2.0"` |
+| `result.reviewStrictness` | `"balanced"` (the default; send it explicitly to be sure). |
+| `result.conceptSelection` | The candidate every stage used: `attempt`, `sha256`, `selectedBy`, `reason`. |
+| `result.warnings` | Non-blocking findings (empty list when none). A different photograph or a subtle extra ornament appears here, not as a failure. |
 | `result.qa.designFreedom` | Same value as above. |
 | `result.qa.conceptReview.mode` | The band for your value (table above). |
 | `result.qa.conceptReview.passed` | `true` |

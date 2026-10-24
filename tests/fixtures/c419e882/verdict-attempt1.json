@@ -1,0 +1,196 @@
+{
+ "checks": [
+  {
+   "anchorId": null,
+   "expectedPolicy": "Preserve the left-hand text hierarchy, dominant right-hand image and lower-left response area.",
+   "feature": "Overall composition and reading flow",
+   "observed": "The square composition retains the headline, body, CTA and contacts in the left column, balanced by the large right-hand photograph. Reading flow is preserved.",
+   "passed": true
+  },
+  {
+   "anchorId": "full_bleed_background",
+   "expectedPolicy": "Retain the full-bleed dark photographic background and strong text contrast.",
+   "feature": "Background coverage and visual styling",
+   "observed": "The photograph fills the canvas, with a nearly black left side supporting white and yellow text.",
+   "passed": true
+  },
+  {
+   "anchorId": "dominant_image_right",
+   "expectedPolicy": "Keep the dominant image region approximately at x=0.55, y=0.06, w=0.45, h=0.88, with right-edge cropping.",
+   "feature": "Dominant image placement, scale and cropping",
+   "observed": "The dominant photographic region remains on the right, beginning near the upper edge and extending into the lower accent. Its scale and right-edge cropping preserve the reference's balance. The photograph uses subdued natural colour rather than monochrome.",
+   "passed": true
+  },
+  {
+   "anchorId": "dark_text_backing_left",
+   "expectedPolicy": "Maintain the dark left-side backing, blended into the photograph, without imagery impairing text.",
+   "feature": "Text-backing geometry and overlap",
+   "observed": "A dark backing occupies approximately the left 60% of the canvas. The photograph remains subordinate behind the text, with no material interference.",
+   "passed": true
+  },
+  {
+   "anchorId": "headline_upper_left",
+   "expectedPolicy": "Preserve the oversized outlined white headline in the upper-left text zone.",
+   "feature": "Primary headline placement, styling and scale",
+   "observed": "The outlined Hebrew headline occupies approximately x=0.08–0.59 and y=0.14–0.26. Its slight leftward extension accommodates the Hebrew while retaining the dominant scale and outline treatment.",
+   "passed": true
+  },
+  {
+   "anchorId": "headline_second_line_left",
+   "expectedPolicy": "Retain a large solid-yellow second line directly below the outlined headline.",
+   "feature": "Secondary headline hierarchy",
+   "observed": "The yellow Hebrew second line occupies approximately y=0.27–0.36 and spans almost the same width as the primary headline. The two-level hierarchy is preserved.",
+   "passed": true
+  },
+  {
+   "anchorId": "body_middle_left",
+   "expectedPolicy": "Keep smaller white supporting copy in the middle-left zone, below a clear gap from the headline.",
+   "feature": "Body-copy placement and relative scale",
+   "observed": "Both approved body passages appear in the middle-left region, approximately y=0.43–0.62. The two-paragraph arrangement retains the intended subordinate scale and separation from the headline.",
+   "passed": true
+  },
+  {
+   "anchorId": "cta_capsule_lower_left",
+   "expectedPolicy": "Preserve the yellow rounded capsule in the lower-left, permitting localized fitting for target copy.",
+   "feature": "CTA panel geometry and placement",
+   "observed": "The yellow capsule remains near y=0.744 with approximately the reference height. It is widened to about 0.33 of the canvas to fit the approved Hebrew CTA without losing legibility.",
+   "passed": true
+  },
+  {
+   "anchorId": "contact_rows_lower_left",
+   "expectedPolicy": "Keep two smaller contact rows beneath the CTA, supported by yellow circular icons.",
+   "feature": "Contact placement and hierarchy",
+   "observed": "The phone and email remain in two readable rows near y=0.83–0.90, with yellow circular icons. Their scale remains subordinate to the CTA.",
+   "passed": true
+  },
+  {
+   "anchorId": "irregular_accent_top_left",
+   "expectedPolicy": "Preserve the irregular yellow diagonal accent cropped by the top and left edges.",
+   "feature": "Upper accent geometry and edge overlap",
+   "observed": "The irregular yellow accent retains its upper-left placement, diagonal direction and edge cropping.",
+   "passed": true
+  },
+  {
+   "anchorId": "irregular_accent_bottom_right",
+   "expectedPolicy": "Preserve the irregular yellow boundary rising from the bottom toward the right edge, with black beneath it.",
+   "feature": "Lower accent geometry and image overlap",
+   "observed": "The lower yellow boundary runs from approximately x=0.39 at the bottom to the right edge near y=0.84. It overlaps the photograph and separates it from the black lower area as intended.",
+   "passed": true
+  },
+  {
+   "anchorId": "stacked_chevrons_upper_right",
+   "expectedPolicy": "Retain the narrow upper-right stack of alternating outlined and filled yellow chevrons.",
+   "feature": "Chevron placement and styling",
+   "observed": "Five alternating outlined and filled yellow chevrons remain near x=0.90–0.95 and y=0.05–0.24.",
+   "passed": true
+  },
+  {
+   "anchorId": "four_dot_accent_lower_right",
+   "expectedPolicy": "Retain the small two-by-two yellow dot motif over the lower-right photograph.",
+   "feature": "Dot-accent placement and overlap",
+   "observed": "The four-dot motif remains near x=0.68–0.73 and y=0.81–0.86, over the photograph and above the lower accent.",
+   "passed": true
+  }
+ ],
+ "constraintConflict": {
+  "conflicted": false,
+  "reason": null
+ },
+ "copyChecks": [
+  {
+   "contentKey": "business.name",
+   "correct": false,
+   "observed": "FIT HOME is absent. The planned area above the primary headline contains no business identity.",
+   "present": false,
+   "readable": false
+  },
+  {
+   "contentKey": "title.primary",
+   "correct": true,
+   "observed": "The outlined headline reads \"אימון אישי\".",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "title.secondary",
+   "correct": true,
+   "observed": "The yellow second headline reads \"אצלכם בבית\".",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "body.primary",
+   "correct": true,
+   "observed": "Reads \"אימוני כושר בהתאמה אישית לרמה, למטרות ולשגרה שלכם.\" across two lines.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "body.secondary",
+   "correct": true,
+   "observed": "Reads \"ליווי אישי, טכניקה נכונה והתמדה לאורך הדרך.\" across two lines.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "cta.primary",
+   "correct": true,
+   "observed": "The capsule reads \"לתיאום אימון היכרות\" in legible black text.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "contact.phone",
+   "correct": true,
+   "observed": "The phone row reads \"050-1234567\".",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "contact.email",
+   "correct": true,
+   "observed": "The email row reads \"info@fithome.example\".",
+   "present": true,
+   "readable": true
+  }
+ ],
+ "documentedExceptions": [
+  "Source marketing copy and contact information were replaced with the supplied Hebrew copy and target contact details; the required business name is still missing.",
+  "Hebrew typography and line wrapping were locally fitted while preserving the outlined-primary and solid-yellow-secondary hierarchy.",
+  "The CTA capsule was widened locally to accommodate the approved Hebrew wording.",
+  "The website contact treatment was adapted to an email row with an envelope icon.",
+  "The source photograph was replaced while preserving the dominant right-hand image region and its visual role."
+ ],
+ "issues": [
+  {
+   "affected": "business.name",
+   "category": "content",
+   "code": "MISSING_BUSINESS_NAME",
+   "impact": "The mandatory business identity is absent, leaving the advertisement without the approved FIT HOME branding.",
+   "region": {
+    "height": 0.03,
+    "width": 0.3,
+    "x": 0.1,
+    "y": 0.095
+   },
+   "severity": "blocking",
+   "suggestion": "Add editable, legible \"FIT HOME\" text in the planned area above the primary headline without moving or reducing the headline."
+  },
+  {
+   "affected": "dominant_image_right",
+   "category": "visual",
+   "code": "PHOTO_COLOUR_VARIATION",
+   "impact": "Subdued skin tones introduce warmth into the reference's otherwise monochrome photographic treatment. The dark balance, yellow emphasis and text contrast remain intact.",
+   "region": {
+    "height": 0.88,
+    "width": 0.45,
+    "x": 0.55,
+    "y": 0.06
+   },
+   "severity": "warning",
+   "suggestion": null
+  }
+ ],
+ "mode": "strict-adherence",
+ "suggestions": []
+}

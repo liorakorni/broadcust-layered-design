@@ -115,9 +115,9 @@ def run(job_id, attempt, asset_id=None):
 
     validate_assets.validate_background(background, canvas)
 
+    concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
     try:
         stats = validate_assets.validate_overlay(overlay, scene, canvas)
-        concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
         inspect_composites(overlay, concept, canvas, job_id, attempt)
         # Regeneration can change alignment. Re-stacking the separated layers and
         # comparing with the approved concept catches material displacement, which
@@ -142,7 +142,10 @@ def run(job_id, attempt, asset_id=None):
     key = artifacts.artifact_key(job_id, Stage.VALIDATE_ASSETS, attempt, "validation.json")
     stored = artifacts.put_json(key, result)
     jobs.record_artifacts(
-        job_id, Stage.VALIDATE_ASSETS, attempt, {"validation": stored["key"]}
+        job_id,
+        Stage.VALIDATE_ASSETS,
+        attempt,
+        {"validation": stored["key"], "conceptSha256": artifacts.sha256_hex(concept)},
     )
     return result
 

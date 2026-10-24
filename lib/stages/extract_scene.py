@@ -137,7 +137,8 @@ def run(job_id, attempt, asset_id=None):
 
     copy_key = job["artifacts"][Stage.PREPARE_COPY]["copy"]
     copy_items = artifacts.get_json(job_id, copy_key)["items"]
-    concept_key = jobs.approved_concept(job)["key"]
+    approved = jobs.approved_concept(job)
+    concept_key = approved["key"]
     concept_bytes = artifacts.get_bytes(job_id, concept_key)
 
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
@@ -175,7 +176,12 @@ def run(job_id, attempt, asset_id=None):
     key = artifacts.artifact_key(job_id, Stage.EXTRACT_SCENE, attempt, "scene.json")
     stored = artifacts.put_json(key, document)
     jobs.record_artifacts(
-        job_id, Stage.EXTRACT_SCENE, attempt, {"scene": stored["key"]}
+        job_id,
+        Stage.EXTRACT_SCENE,
+        attempt,
+        # Which concept the scene describes, so FINALIZE can prove every stage
+        # used the one that was selected.
+        {"scene": stored["key"], "conceptSha256": artifacts.sha256_hex(concept_bytes)},
     )
     return {
         "scene": stored["key"],

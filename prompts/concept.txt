@@ -14,10 +14,13 @@ BRIEF:
 
 {instructions_block}
 
-{repair_block}
-
-APPROVED COPY (use these exact strings; do not add, translate or embellish):
+MANDATORY APPROVED TEXT (every line below must appear in the design, exactly once,
+spelled exactly as given, fully readable; do not add, translate or embellish):
 {copy_block}
+
+PLANNED POSITIONS for that text (normalized boxes, 0..1 from the top-left). Put
+each item at its planned position; do not move it to somewhere else:
+{placement_block}
 
 BRAND:
 {brand_block}
@@ -28,6 +31,9 @@ Requirements:
 - Include decorative graphic artwork: panels, ribbons, badges or framing shapes
   that support the text. These must read as graphics layered OVER the
   photograph, not as part of the photograph.
-- Place the approved copy as text in the layout so the hierarchy is visible.
+- Place the approved copy as text in the layout so the hierarchy is visible. The
+  business name is approved copy like any other line: it must be present.
+- Take the photograph's subject matter from the brief. Copy the reference's
+  layout and visual styling, not what it depicts.
 - Do NOT invent prices, dates, offers, phone numbers, credentials or claims.
   Use only the facts given above.

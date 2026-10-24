@@ -223,7 +223,7 @@ def test_unapproved_concept_always_reaches_correct_concept():
     $.failure. A direct edge would strand the job as RUNNING."""
     choice = STATES["ConceptApproved"]
     assert choice["Default"] == "CorrectConcept"
-    assert [c["Next"] for c in choice["Choices"]] == ["ExtractScene"]
+    assert [c["Next"] for c in choice["Choices"]] == ["ExtractScene", "SelectConcept"]
     assert choice["Choices"][0]["Variable"] == "$.conceptReview.artifacts.approved"
     assert STATES["CorrectConcept"]["Catch"][0]["Next"] == "RecordFailure"
     assert STATES["CorrectConcept"]["Parameters"]["operation"] == "CORRECT_CONCEPT"

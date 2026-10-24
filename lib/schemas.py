@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 import conf
+from lib import review_policy
 from lib.errors import InvalidRequest, InvalidScene
 
 HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -182,6 +183,18 @@ class StartRequest(Strict):
     # SPEC section 2.7. Absent -> 0 (default, validators do not run); explicit
     # null is rejected by the validator below rather than defaulted.
     designFreedom: int = 0
+    # How strictly the concept is judged, independent of how freely it is
+    # generated. Absent -> "balanced"; explicit null or an unknown value is
+    # rejected rather than defaulted.
+    reviewStrictness: str = review_policy.DEFAULT_STRICTNESS
+
+    @field_validator("reviewStrictness", mode="before")
+    @classmethod
+    def _review_strictness(cls, v):
+        try:
+            return review_policy.validate_strictness(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
 
     @field_validator("designFreedom", mode="before")
     @classmethod
@@ -243,9 +256,13 @@ def canonical_request_hash(request: "StartRequest") -> str:
     """
     import hashlib
 
-    canonical = json.dumps(
-        request.model_dump(mode="json"), sort_keys=True, ensure_ascii=False
-    ).encode("utf-8")
+    body = request.model_dump(mode="json")
+    # An omitted reviewStrictness and an explicit default mean the same thing, and
+    # a request accepted before the field existed must keep hashing the way it
+    # did, or replaying it would read as an idempotency conflict.
+    if body.get("reviewStrictness") == review_policy.DEFAULT_STRICTNESS:
+        body.pop("reviewStrictness")
+    canonical = json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
 
@@ -417,11 +434,39 @@ def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
 # --------------------------------------------------------------------------
 
 
+class NormalizedBox(Strict):
+    """Canvas-independent geometry: every value is a 0..1 fraction."""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+    @field_validator("x", "y", "width", "height")
+    @classmethod
+    def _unit(cls, v):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("box values must be between 0 and 1")
+        return v
+
+
 class BlockingIssue(Strict):
+    """A finding from the final review.
+
+    The structured fields are optional here so a review written before they
+    existed still parses; the model's schema requires them.
+    """
+
     code: str
     layerId: Optional[str] = None
     assetId: Optional[str] = None
     message: str
+    category: Optional[Literal["visual", "content", "technical"]] = None
+    severity: Optional[Literal["warning", "blocking"]] = None
+    affected: Optional[str] = None
+    impact: Optional[str] = None
+    suggestion: Optional[str] = None
+    region: Optional[NormalizedBox] = None
 
 
 class ReviewVerdict(Strict):
@@ -431,6 +476,9 @@ class ReviewVerdict(Strict):
     # would silently turn a malformed response into an approval.
     passed: bool
     blockingIssues: list[BlockingIssue] = Field(max_length=40)
+    # Non-blocking findings. Defaults to empty so an older response still parses;
+    # a warning can never block, so omitting them is the safe direction.
+    warnings: list[BlockingIssue] = Field(default_factory=list, max_length=40)
     suggestions: list[str] = Field(max_length=40)
     # Defaults to False, the safe direction: an absent flag routes to the ordinary
     # HTML correction rather than regenerating a paid concept.
@@ -463,23 +511,10 @@ def parse_review(payload):
 # --------------------------------------------------------------------------
 
 ANCHOR_KINDS = ("dominantImage", "graphicPanel", "textZone", "logo", "other")
-ISSUE_CATEGORIES = ("layoutAdherence", "content", "readability", "composition", "other")
-
-
-class NormalizedBox(Strict):
-    """Canvas-independent geometry: every value is a 0..1 fraction."""
-
-    x: float
-    y: float
-    width: float
-    height: float
-
-    @field_validator("x", "y", "width", "height")
-    @classmethod
-    def _unit(cls, v):
-        if not 0.0 <= v <= 1.0:
-            raise ValueError("box values must be between 0 and 1")
-        return v
+#: What the model may declare. Historical reviews used a different vocabulary;
+#: review_policy.LEGACY_CATEGORY maps it for anything that still reads them.
+ISSUE_CATEGORIES = review_policy.ISSUE_CATEGORIES
+ISSUE_SEVERITIES = review_policy.SEVERITIES
 
 
 class ReferenceAnchor(Strict):
@@ -497,9 +532,24 @@ class ReferenceAnchor(Strict):
         return v
 
 
+class CopyPlacement(Strict):
+    """Where one approved copy item is planned to sit.
+
+    Planned once, from the reference, then reused unchanged by generation, review
+    and every correction. Without it each attempt chooses its own place for text
+    that has no counterpart in the reference (a business name, usually), and a
+    correction moves it somewhere new instead of putting it back.
+    """
+
+    contentKey: str
+    box: NormalizedBox
+    basis: str = Field(min_length=1, max_length=200)
+
+
 class ReferenceAnalysis(Strict):
     # No font-identification field on purpose: a font cannot be named from pixels.
     anchors: list[ReferenceAnchor] = Field(max_length=40)
+    copyPlacements: list[CopyPlacement] = Field(max_length=40)
     hierarchy: list[str] = Field(max_length=40)
     overlaps: list[str] = Field(max_length=40)
     alignment: str
@@ -518,9 +568,28 @@ class ConceptCheck(Strict):
 
 
 class ConceptIssue(Strict):
+    """One finding, with the evidence the backend needs to weigh it.
+
+    `severity` is the model's proposal; the backend applies its own rules to it
+    (review_policy.normalize_issue). `region` is where the problem is, so a
+    correction can edit just there instead of regenerating the frame.
+    """
+
     code: str
-    category: Literal["layoutAdherence", "content", "readability", "composition", "other"]
-    message: str
+    category: Literal["visual", "content", "technical"]
+    severity: Literal["warning", "blocking"]
+    affected: str
+    impact: str
+    suggestion: Optional[str]
+    region: Optional[NormalizedBox]
+
+
+class CopyCheck(Strict):
+    contentKey: str
+    present: bool
+    correct: bool
+    readable: bool
+    observed: str
 
 
 class ConstraintConflict(Strict):
@@ -529,11 +598,13 @@ class ConstraintConflict(Strict):
 
 
 class ConceptReviewVerdict(Strict):
-    passed: bool
+    # No `passed`: approval is computed by the backend from the evidence below,
+    # so there is no model-asserted flag to trust or to contradict.
     mode: str
     checks: list[ConceptCheck] = Field(max_length=60)
+    copyChecks: list[CopyCheck] = Field(max_length=60)
     documentedExceptions: list[str] = Field(max_length=40)
-    blockingIssues: list[ConceptIssue] = Field(max_length=40)
+    issues: list[ConceptIssue] = Field(max_length=60)
     suggestions: list[str] = Field(max_length=40)
     constraintConflict: ConstraintConflict
 

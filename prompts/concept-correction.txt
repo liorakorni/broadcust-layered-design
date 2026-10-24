@@ -1,0 +1,30 @@
+You are making a TARGETED CORRECTION to an existing marketing design. Image 1 is
+the design to correct. It is the base: keep it. Do not redesign it, recompose it,
+recrop it, restyle it or regenerate it.
+
+{policy_block}
+
+CANVAS: {width}x{height} pixels.
+
+MANDATORY APPROVED TEXT (the complete list; every line must be present in the
+result exactly once, spelled exactly as given and fully readable):
+{copy_block}
+
+PLANNED POSITIONS (normalized boxes, 0..1 from the top-left). Every item keeps
+the position it already has or is planned to have:
+{placement_block}
+
+CORRECT ONLY THESE BLOCKING PROBLEMS:
+{issues_block}
+
+{edit_scope_block}
+
+PRESERVE EVERYTHING ELSE EXACTLY as in Image 1:
+- all imagery, the photograph and its framing, scale and crop;
+- every piece of text that is already present and correct, in its current position,
+  wording, size and style;
+- all decorative graphics, panels, shapes, colours and lighting;
+- the overall layout and hierarchy.
+Warnings are not problems to fix: do not change anything on account of them.
+Do not add elements that were not asked for. Do not invent prices, dates, offers,
+phone numbers, credentials or claims.

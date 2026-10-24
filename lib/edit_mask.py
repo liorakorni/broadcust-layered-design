@@ -90,3 +90,108 @@ def _covered_layers(scene):
     for layer in scene.get("imageLayers") or []:
         if layer.get("type") == "image":
             yield layer
+
+
+# --------------------------------------------------------------------------
+# Concept correction
+# --------------------------------------------------------------------------
+
+#: Regions to correct are padded by this fraction of the image width. A planned
+#: box is where a line of text is meant to sit, not the glyph bounds, and a mask
+#: that clips the first or last letter would produce half a word.
+REGION_PAD_FRACTION = 0.012
+
+#: The seam between repainted and kept pixels is feathered by this fraction of
+#: the image width, so the correction does not leave a hard rectangle behind.
+FEATHER_FRACTION = 0.004
+
+
+def build_region_mask(size, boxes, pad_fraction=REGION_PAD_FRACTION):
+    """Return `(png_bytes, edit_fraction)` repainting only the given boxes.
+
+    `boxes` are normalized `{x, y, width, height}` dicts. Same convention as the
+    clean-photo mask: alpha 0 marks pixels the model may repaint, alpha 255 marks
+    pixels it must keep. Everything outside the boxes is locked, which is what
+    stops a "just add the business name" correction from also changing the photo.
+    """
+    from PIL import Image, ImageDraw
+
+    width, height = size
+    pad = width * pad_fraction
+    edit = Image.new("L", size, 0)
+    draw = ImageDraw.Draw(edit)
+    for box in boxes:
+        draw.rectangle(
+            [
+                max(0, box["x"] * width - pad),
+                max(0, box["y"] * height - pad),
+                min(width, (box["x"] + box["width"]) * width + pad),
+                min(height, (box["y"] + box["height"]) * height + pad),
+            ],
+            fill=255,
+        )
+    keep = edit.point(lambda a: 0 if a else 255)
+    mask = Image.new("RGBA", size, (0, 0, 0, 255))
+    mask.putalpha(keep)
+    histogram = edit.histogram()
+    edit_fraction = histogram[255] / (sum(histogram) or 1)
+    buf = io.BytesIO()
+    mask.save(buf, format="PNG")
+    return buf.getvalue(), edit_fraction
+
+
+def preserve_outside(base_bytes, result_bytes, mask_bytes):
+    """Return the result with every kept pixel taken from the base, as PNG bytes.
+
+    A mask asks the provider to leave pixels alone; this makes sure it did. The
+    model's output is used only inside the repaint region (feathered at its
+    edge), so everything the correction was not meant to touch is the base,
+    byte for byte, whatever the provider returned.
+    """
+    from PIL import Image, ImageChops, ImageFilter
+
+    with Image.open(io.BytesIO(base_bytes)) as base_img:
+        base = base_img.convert("RGB")
+    with Image.open(io.BytesIO(result_bytes)) as result_img:
+        result = result_img.convert("RGB")
+    with Image.open(io.BytesIO(mask_bytes)) as mask_img:
+        keep = mask_img.convert("RGBA").getchannel("A")
+    if result.size != base.size:
+        result = result.resize(base.size, Image.LANCZOS)
+    if keep.size != base.size:
+        keep = keep.resize(base.size, Image.NEAREST)
+
+    repaint = keep.point(lambda a: 255 if a < 128 else 0)
+    feather = max(1, round(base.size[0] * FEATHER_FRACTION))
+    # Blur for a soft seam, then clip to the repaint region: the blend can fade in
+    # from the region's edge, but it never reaches a pixel the mask kept.
+    soft = ImageChops.darker(repaint.filter(ImageFilter.GaussianBlur(feather)), repaint)
+    out = Image.composite(result, base, soft)
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def outside_difference(base_bytes, other_bytes, mask_bytes):
+    """Mean absolute difference (0..255) over the pixels the mask keeps.
+
+    A measurement, not a gate: tests and the correction record use it to show
+    what was actually preserved rather than what the prompt asked for.
+    """
+    from PIL import Image, ImageChops
+
+    with Image.open(io.BytesIO(base_bytes)) as a_img:
+        a = a_img.convert("RGB")
+    with Image.open(io.BytesIO(other_bytes)) as b_img:
+        b = b_img.convert("RGB")
+    with Image.open(io.BytesIO(mask_bytes)) as m_img:
+        keep = m_img.convert("RGBA").getchannel("A")
+    if b.size != a.size:
+        b = b.resize(a.size, Image.LANCZOS)
+    diff = ImageChops.difference(a, b).convert("L")
+    kept = keep.point(lambda v: 255 if v >= 128 else 0)
+    count = kept.histogram()[255]
+    if not count:
+        return 0.0
+    hist = Image.composite(diff, Image.new("L", a.size, 0), kept).histogram()
+    return sum(i * c for i, c in enumerate(hist)) / count

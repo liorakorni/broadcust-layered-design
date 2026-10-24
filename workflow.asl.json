@@ -176,12 +176,17 @@
     },
     "ConceptApproved": {
       "Type": "Choice",
-      "Comment": "Anything not approved goes to CorrectConcept, which raises ReferenceAdherenceFailed when no round is left. It must not go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever.",
+      "Comment": "An eligible candidate was selected and frozen: continue to ExtractScene. Otherwise, while a concept round remains, go to CorrectConcept (which plans a targeted edit of the best stored candidate). When no round remains go to SelectConcept, which re-evaluates every stored candidate under the current policy and selects the best eligible one - or fails with a precise reason. Neither may go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever.",
       "Choices": [
         {
           "Variable": "$.conceptReview.artifacts.approved",
           "BooleanEquals": true,
           "Next": "ExtractScene"
+        },
+        {
+          "Variable": "$.conceptReview.artifacts.correctionAvailable",
+          "BooleanEquals": false,
+          "Next": "SelectConcept"
         }
       ],
       "Default": "CorrectConcept"
@@ -618,6 +623,43 @@
     "Failed": {
       "Type": "Fail",
       "Comment": "The job record already carries the structured error; this just ends the execution."
+    },
+    "SelectConcept": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Retry exhaustion. Every stored concept candidate is evaluated under the CURRENT policy (stored verdicts are re-decided; candidates reviewed under another policy version are reviewed again, with the reevaluation stored beside the original). The best ELIGIBLE candidate is frozen with its selection reason; the latest attempt is never chosen merely for being latest. With no eligible candidate it raises RequiredCopyMissing (content) or ReferenceAdherenceFailed (structure).",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW_CONCEPT",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "SELECT_CONCEPT"
+      },
+      "ResultPath": "$.conceptSelection",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout",
+            "ProviderRateLimited",
+            "InvalidModelJson",
+            "ReferenceFetchFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ExtractScene"
     }
   }
 }

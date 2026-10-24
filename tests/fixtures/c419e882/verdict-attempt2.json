@@ -1,0 +1,195 @@
+{
+ "checks": [
+  {
+   "anchorId": null,
+   "expectedPolicy": "Preserve the left-hand text sequence, dominant right-hand imagery and lower-left action/contact grouping.",
+   "feature": "Overall composition and reading flow",
+   "observed": "The concept retains the headline, supporting copy, CTA and contacts down the left, balanced by large imagery on the right. The added business identity sits between the body and CTA rather than at its planned upper-left position.",
+   "passed": true
+  },
+  {
+   "anchorId": "full_bleed_background",
+   "expectedPolicy": "Maintain a full-bleed, predominantly dark photographic background with strong yellow and white foreground contrast.",
+   "feature": "Background coverage and visual styling",
+   "observed": "Full-bleed coverage and the dark background are retained. The photograph uses visible natural color rather than the reference's monochrome treatment.",
+   "passed": true
+  },
+  {
+   "anchorId": "dominant_image_right",
+   "expectedPolicy": "Keep the dominant image region approximately within x=0.55–1.00 and y=0.06–0.94, with right-edge cropping and comparable visual weight.",
+   "feature": "Dominant image placement, scale and edge cropping",
+   "observed": "The dominant photographic region occupies approximately the right 45% of the canvas from near the top to the lower accent. It remains cropped at the right edge and does not obstruct the copy.",
+   "passed": true
+  },
+  {
+   "anchorId": "dark_text_backing_left",
+   "expectedPolicy": "Preserve the broad dark left backing and its soft transition into the right-side photograph.",
+   "feature": "Text-backing geometry and image overlap",
+   "observed": "A broad dark field supports the left-hand text, transitioning into the photograph without a new hard panel boundary. Text remains clearly separated from the bright image details.",
+   "passed": true
+  },
+  {
+   "anchorId": "headline_upper_left",
+   "expectedPolicy": "Preserve the large outlined headline in the upper-left text zone.",
+   "feature": "Primary headline position, scale and outline treatment",
+   "observed": "The Hebrew primary headline occupies approximately x=0.08–0.58 and y=0.14–0.25. Its white outline and dominant scale preserve the intended emphasis.",
+   "passed": true
+  },
+  {
+   "anchorId": "headline_second_line_left",
+   "expectedPolicy": "Keep a bold yellow second headline immediately below the outlined primary headline, with comparable width.",
+   "feature": "Secondary headline hierarchy",
+   "observed": "The yellow Hebrew second line remains directly beneath the outlined headline, spanning approximately x=0.08–0.58. Localized Hebrew fitting preserves the two-tier hierarchy.",
+   "passed": true
+  },
+  {
+   "anchorId": "body_middle_left",
+   "expectedPolicy": "Keep smaller white supporting text in the middle-left zone, clearly subordinate to the headlines.",
+   "feature": "Body text position and relative scale",
+   "observed": "Both approved body passages appear around x=0.10–0.53 and y=0.43–0.61, with readable white text and a clear gap between paragraphs.",
+   "passed": true
+  },
+  {
+   "anchorId": "cta_capsule_lower_left",
+   "expectedPolicy": "Preserve the yellow rounded capsule near x=0.10, y=0.74, allowing localized fitting for the approved CTA.",
+   "feature": "CTA capsule geometry and placement",
+   "observed": "The capsule remains at approximately x=0.10, y=0.74 with the reference's rounded shape and similar height. Its width increases to approximately 0.32 to accommodate the Hebrew CTA.",
+   "passed": true
+  },
+  {
+   "anchorId": "contact_rows_lower_left",
+   "expectedPolicy": "Preserve two compact contact rows below the CTA with yellow icons and smaller white text.",
+   "feature": "Contact grouping and hierarchy",
+   "observed": "The phone and email remain in two rows around y=0.83 and y=0.87, with yellow circular icons at the left and legible white contact details.",
+   "passed": true
+  },
+  {
+   "anchorId": "irregular_accent_top_left",
+   "expectedPolicy": "Retain the yellow irregular edge accent entering from the upper-left canvas boundary.",
+   "feature": "Upper irregular accent geometry",
+   "observed": "The yellow irregular accent follows the same upper-left diagonal role and comparable normalized extent.",
+   "passed": true
+  },
+  {
+   "anchorId": "irregular_accent_bottom_right",
+   "expectedPolicy": "Retain the rising irregular yellow lower edge and black area beneath it, overlapping the lower image region.",
+   "feature": "Lower irregular accent geometry and overlap",
+   "observed": "The lower accent rises from approximately x=0.39 at the bottom toward the right edge around y=0.84, preserving the image overlap and black lower wedge.",
+   "passed": true
+  },
+  {
+   "anchorId": "stacked_chevrons_upper_right",
+   "expectedPolicy": "Preserve the narrow vertical stack of alternating outlined and filled yellow chevrons.",
+   "feature": "Upper-right decorative stack",
+   "observed": "Five alternating outlined and filled chevrons occupy approximately x=0.90–0.95 and y=0.05–0.24.",
+   "passed": true
+  },
+  {
+   "anchorId": "four_dot_accent_lower_right",
+   "expectedPolicy": "Preserve the small two-by-two yellow dot arrangement over the lower image.",
+   "feature": "Lower-right dot accent",
+   "observed": "The four-dot accent remains near x=0.67–0.72 and y=0.81–0.86, with comparable scale and unobtrusive image overlap.",
+   "passed": true
+  }
+ ],
+ "constraintConflict": {
+  "conflicted": false,
+  "reason": null
+ },
+ "copyChecks": [
+  {
+   "contentKey": "business.name",
+   "correct": true,
+   "observed": "FIT HOME appears clearly in bold white below the body copy.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "title.primary",
+   "correct": true,
+   "observed": "אימון אישי appears as the large outlined upper headline.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "title.secondary",
+   "correct": true,
+   "observed": "אצלכם בבית appears as the bold yellow second headline.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "body.primary",
+   "correct": true,
+   "observed": "אימוני כושר בהתאמה אישית לרמה, למטרות ולשגרה שלכם. appears across two readable white lines.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "body.secondary",
+   "correct": true,
+   "observed": "ליווי אישי, טכניקה נכונה והתמדה לאורך הדרך. appears across two readable white lines.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "cta.primary",
+   "correct": true,
+   "observed": "לתיאום אימון היכרות appears in black inside the yellow capsule.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "contact.phone",
+   "correct": true,
+   "observed": "050-1234567 appears clearly in the first contact row.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "contact.email",
+   "correct": true,
+   "observed": "info@fithome.example appears clearly in the second contact row.",
+   "present": true,
+   "readable": true
+  }
+ ],
+ "documentedExceptions": [
+  "Source wording and contact details have been replaced with the approved FIT HOME content.",
+  "The Hebrew copy uses localized line wrapping and headline fitting while retaining the outlined-primary and solid-yellow-secondary hierarchy.",
+  "The CTA capsule is widened locally to fit the approved Hebrew label without reducing readability.",
+  "The replacement photograph preserves the reference image region's placement and visual role; matching the reference's particular subject, pose or equipment is not required."
+ ],
+ "issues": [
+  {
+   "affected": "dominant_image_right",
+   "category": "visual",
+   "code": "PHOTO_COLOR_TREATMENT",
+   "impact": "Natural skin and background colors introduce additional color emphasis into the reference's black, white and yellow styling. The image still balances the text and does not compromise readability or headline prominence.",
+   "region": {
+    "height": 0.88,
+    "width": 0.45,
+    "x": 0.55,
+    "y": 0.06
+   },
+   "severity": "warning",
+   "suggestion": null
+  },
+  {
+   "affected": "business.name",
+   "category": "visual",
+   "code": "BRAND_POSITION_SHIFT",
+   "impact": "The business identity appears below the body rather than at the planned upper-left position, so readers encounter the brand later. The small yellow rule above it adds a minor separator, but neither addition materially disrupts the preserved headline-to-CTA flow.",
+   "region": {
+    "height": 0.07,
+    "width": 0.2,
+    "x": 0.095,
+    "y": 0.635
+   },
+   "severity": "warning",
+   "suggestion": null
+  }
+ ],
+ "mode": "strict-adherence",
+ "suggestions": []
+}

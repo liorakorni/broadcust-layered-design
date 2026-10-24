@@ -7,22 +7,43 @@ later analysis of the approved concept itself.
 
 Persists two artifacts: policy.json (the derived policy, verbatim) and
 reference-analysis.json.
+
+The analysis is content-neutral: anchors describe regions by position, size and
+visual role, never by what they depict, because the brief (not the reference)
+decides subject matter. It also plans WHERE every approved copy item sits. That
+plan is made once and reused by generation, review and every correction, so a
+text item with no counterpart in the reference (a business name, typically) is
+not given a new position on each attempt.
 """
 
 from __future__ import annotations
 
 import conf
-from lib import artifacts, jobs, prompts, reference, reference_policy, schemas
-from lib.errors import Stage
+from lib import (
+    artifacts, jobs, prompts, reference, reference_policy, review_policy, schemas,
+)
+from lib.errors import InvalidModelJson, Stage
 from lib.providers import vision
 
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
+
+_BOX = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["x", "y", "width", "height"],
+    "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+    },
+}
 
 REFERENCE_ANALYSIS_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "anchors", "hierarchy", "overlaps", "alignment", "readingFlow",
+        "anchors", "copyPlacements", "hierarchy", "overlaps", "alignment", "readingFlow",
         "palette", "visualQualities", "notes",
     ],
     "properties": {
@@ -51,6 +72,19 @@ REFERENCE_ANALYSIS_SCHEMA = {
                 },
             },
         },
+        "copyPlacements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["contentKey", "box", "basis"],
+                "properties": {
+                    "contentKey": {"type": "string"},
+                    "box": _BOX,
+                    "basis": {"type": "string"},
+                },
+            },
+        },
         "hierarchy": _STRING_LIST,
         "overlaps": _STRING_LIST,
         "alignment": {"type": "string"},
@@ -62,12 +96,44 @@ REFERENCE_ANALYSIS_SCHEMA = {
 }
 
 
+def check_placements(analysis, copy_items):
+    """Every approved copy item has exactly one planned position, and no other.
+
+    A missing placement would leave the item to be positioned ad hoc on each
+    attempt - the instability this plan exists to remove - so an incomplete plan
+    is a bad model response (retried), not something to fill in silently.
+    """
+    wanted = [item["contentKey"] for item in copy_items]
+    planned = [p["contentKey"] for p in analysis["copyPlacements"]]
+    problems = []
+    missing = [k for k in wanted if k not in planned]
+    unknown = sorted({k for k in planned if k not in wanted})
+    duplicate = sorted({k for k in planned if planned.count(k) > 1})
+    if missing:
+        problems.append("missing " + ", ".join(missing))
+    if unknown:
+        problems.append("unknown " + ", ".join(unknown))
+    if duplicate:
+        problems.append("duplicated " + ", ".join(duplicate))
+    for placement in analysis["copyPlacements"]:
+        box = placement["box"]
+        if box["width"] <= 0 or box["height"] <= 0:
+            problems.append(f"empty box for {placement['contentKey']}")
+        elif box["x"] + box["width"] > 1.001 or box["y"] + box["height"] > 1.001:
+            problems.append(f"{placement['contentKey']} extends past the canvas")
+    if problems:
+        raise InvalidModelJson("copyPlacements invalid: " + "; ".join(problems))
+
+
 def run(job_id, attempt, asset_id=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, Stage.ANALYZE_REFERENCE)
     request = artifacts.get_json(job_id, job["requestKey"])
 
-    policy = reference_policy.derive_reference_policy(request.get("designFreedom", 0))
+    policy = reference_policy.derive_reference_policy(
+        request.get("designFreedom", 0),
+        request.get("reviewStrictness", review_policy.DEFAULT_STRICTNESS),
+    )
     copy_key = job["artifacts"][Stage.PREPARE_COPY]["copy"]
     copy_items = artifacts.get_json(job_id, copy_key)["items"]
     canvas = request["canvas"]
@@ -83,6 +149,7 @@ def run(job_id, attempt, asset_id=None):
         design_freedom=policy["designFreedom"],
         policy_instruction=policy["instruction"],
         must_preserve=prompts.bullet_list(policy["mustPreserve"]),
+        content_boundary=prompts.bullet_list(policy["contentBoundary"]),
         copy_block=prompts.copy_block(copy_items),
     )
     raw = vision.analyze(
@@ -95,6 +162,9 @@ def run(job_id, attempt, asset_id=None):
         detail="original",
     )
     analysis = schemas.parse_reference_analysis(raw).model_dump(mode="json")
+    check_placements(analysis, copy_items)
+    # Stamped so a later stage can refuse to reuse it under a different policy.
+    analysis["policyVersion"] = policy["policyVersion"]
 
     policy_stored = artifacts.put_json(
         artifacts.artifact_key(job_id, Stage.ANALYZE_REFERENCE, attempt, "policy.json"),

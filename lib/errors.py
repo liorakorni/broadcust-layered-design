@@ -100,6 +100,8 @@ class Code:
     REFERENCE_FETCH_FAILED = "REFERENCE_FETCH_FAILED"
     REFERENCE_ADHERENCE_FAILED = "REFERENCE_ADHERENCE_FAILED"
     REFERENCE_CONSTRAINT_CONFLICT = "REFERENCE_CONSTRAINT_CONFLICT"
+    REQUIRED_COPY_MISSING = "REQUIRED_COPY_MISSING"
+    POLICY_VERSION_MISMATCH = "POLICY_VERSION_MISMATCH"
 
     # Assembly and delivery
     ASSEMBLY_FAILED = "ASSEMBLY_FAILED"
@@ -123,6 +125,11 @@ class LayeredDesignError(Exception):
     stage: str = Stage.ACCEPT_REQUEST
     code: str = Code.INTERNAL
     retryable: bool = False
+    #: What kind of failure this is, for callers that route on it:
+    #: "content" (approved copy), "reference-adherence" (structure),
+    #: "asset-validation" (layers, transparency, assets), or "technical".
+    #: An additive field beside `code`; no existing code changed meaning.
+    category: str = "technical"
 
     def __init__(self, message, stage=None, code=None, retryable=None):
         super().__init__(message)
@@ -140,6 +147,7 @@ class LayeredDesignError(Exception):
             "code": self.code,
             "message": self.message,
             "retryable": self.retryable,
+            "category": self.category,
         }
 
 
@@ -252,12 +260,14 @@ class CopyInvalid(LayeredDesignError):
 
     stage = Stage.PREPARE_COPY
     code = Code.COPY_INVALID
+    category = "content"
     retryable = True
 
 
 class InvalidScene(LayeredDesignError):
     stage = Stage.EXTRACT_SCENE
     code = Code.INVALID_SCENE
+    category = "asset-validation"
 
 
 class InvalidTransparency(LayeredDesignError):
@@ -265,6 +275,7 @@ class InvalidTransparency(LayeredDesignError):
 
     stage = Stage.VALIDATE_ASSETS
     code = Code.INVALID_TRANSPARENCY
+    category = "asset-validation"
 
 
 class OverlayRepairNeeded(InvalidTransparency):
@@ -282,6 +293,7 @@ class OverlayRepairNeeded(InvalidTransparency):
 class AssetInvalid(LayeredDesignError):
     stage = Stage.VALIDATE_ASSETS
     code = Code.ASSET_INVALID
+    category = "asset-validation"
 
 
 class ReferenceFetchFailed(LayeredDesignError):
@@ -321,6 +333,35 @@ class ReferenceAdherenceFailed(LayeredDesignError):
 
     stage = Stage.REVIEW_CONCEPT
     code = Code.REFERENCE_ADHERENCE_FAILED
+    category = "reference-adherence"
+    retryable = False
+
+
+class RequiredCopyMissing(LayeredDesignError):
+    """No concept candidate carries all of the mandatory approved copy.
+
+    A content failure, reported as such: it is not a layout problem and no amount
+    of structural similarity makes up for it. The message names the candidates'
+    missing items so the caller sees what is absent rather than a generic
+    adherence failure.
+    """
+
+    stage = Stage.REVIEW_CONCEPT
+    code = Code.REQUIRED_COPY_MISSING
+    category = "content"
+    retryable = False
+
+
+class PolicyVersionMismatch(LayeredDesignError):
+    """A stored policy or analysis was produced under an incompatible version.
+
+    Reference analyses are reused across stages of a job. Reading one written
+    under an older policy as if it satisfied the current one would silently apply
+    the wrong rules, so it fails here and names both versions.
+    """
+
+    stage = Stage.REVIEW_CONCEPT
+    code = Code.POLICY_VERSION_MISMATCH
     retryable = False
 
 
@@ -333,6 +374,7 @@ class ReferenceConstraintConflict(LayeredDesignError):
 
     stage = Stage.REVIEW_CONCEPT
     code = Code.REFERENCE_CONSTRAINT_CONFLICT
+    category = "reference-adherence"
     retryable = False
 
 
@@ -373,4 +415,5 @@ def as_error_dict(exc, default_stage=Stage.ACCEPT_REQUEST):
         "code": Code.INTERNAL,
         "message": "Internal error.",
         "retryable": False,
+        "category": "technical",
     }

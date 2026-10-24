@@ -140,6 +140,7 @@ def run_layered_design(payload, caller_context):
             request_key,
             {"width": request.canvas.width, "height": request.canvas.height},
             design_freedom=request.designFreedom,
+            review_strictness=request.reviewStrictness,
         )
 
     _ensure_execution(job_id)

@@ -2,15 +2,27 @@
 
 SPEC section 2.7. `designFreedom` is a creative-control setting, not a measured
 pixel difference, similarity score or provider parameter. This module turns the
-number into constraints stated in plain English, which the concept prompt and the
-concept review both consume.
+number into constraints stated in plain English, which the concept prompt, the
+concept review and every concept correction all consume.
+
+The policy is deliberately content-neutral. The brief controls subject matter and
+approved text; the reference controls layout and visual styling. Nothing here may
+require a person, a pose, an object category or exact body bounds merely because
+they appear in the reference. How strictly a deviation is judged is NOT decided
+here: that is `reviewStrictness` (lib/review_policy.py), carried in the same
+policy document so one versioned artifact describes both.
 
 Pure: no I/O, no configuration, no provider calls.
 """
 
 from __future__ import annotations
 
-POLICY_VERSION = "1.0"
+from lib import review_policy
+
+#: 2.0: content-neutral structural constraints, `reviewStrictness` and the
+#: severity policy, planned copy placements in the reference analysis. A 1.0
+#: policy or analysis is never reused under 2.0 (see lib/policy_context.py).
+POLICY_VERSION = "2.0"
 
 STRICT = "strict-adherence"
 CLOSE = "close-adaptation"
@@ -30,19 +42,22 @@ DOCUMENTED_EXCEPTIONS = (
 
 _INSTRUCTIONS = {
     STRICT: (
-        "Reproduce the reference composition as closely as practical. Preserve the "
-        "dominant image placement and scale, graphic-panel geometry, overlap "
-        "relationships, typography hierarchy and reading flow. Make no discretionary "
-        "redesign. Adapt only what is necessary for the supplied target copy, assets "
-        "and brand. Replace all source text, business identities and irrelevant "
-        "subject matter. Record necessary deviations."
+        "Reproduce the reference layout and visual styling as closely as practical. "
+        "Preserve the placement and scale of the dominant image region, graphic-panel "
+        "geometry, overlap relationships, typography hierarchy and reading flow. Make "
+        "no discretionary redesign. The brief, not the reference, decides what the "
+        "image shows: take its subject matter from the brief. Adapt only what is "
+        "necessary for the supplied target copy, assets and brand. Replace all source "
+        "text, business identities and source subject matter. Record necessary "
+        "deviations."
     ),
     CLOSE: (
-        "Preserve the reference composition, dominant image placement and relative "
-        "scale, graphic-panel geometry, overlap relationships, typography hierarchy "
-        "and reading flow. Adapt only what is necessary for the supplied target copy, "
-        "assets and brand. Replace all source text, business identities and "
-        "irrelevant subject matter. Avoid a new generic layout. Record necessary "
+        "Preserve the reference layout, the placement and relative scale of the "
+        "dominant image region, graphic-panel geometry, overlap relationships, "
+        "typography hierarchy and reading flow. The brief, not the reference, decides "
+        "what the image shows. Adapt only what is necessary for the supplied target "
+        "copy, assets and brand. Replace all source text, business identities and "
+        "source subject matter. Avoid a new generic layout. Record necessary "
         "deviations."
     ),
     GUIDED: (
@@ -68,13 +83,13 @@ _INSTRUCTIONS = {
 _MUST_PRESERVE = {
     STRICT: [
         "Overall composition and reading flow",
-        "Dominant image placement and scale",
+        "Placement and scale of the dominant image region (position, size and edge cropping; not its subject)",
         "Graphic-panel geometry and overlaps",
         "Typography hierarchy and relative text scale",
     ],
     CLOSE: [
         "Recognizable layout and major anchors",
-        "Dominant image placement and relative scale",
+        "Placement and relative scale of the dominant image region (not its subject)",
         "Graphic-panel geometry and overlap relationships",
         "Typography hierarchy and reading flow",
     ],
@@ -122,8 +137,15 @@ def mode_for(design_freedom: int) -> str:
     return FREE
 
 
-def derive_reference_policy(design_freedom: int) -> dict:
-    """Return the policy for a validated 0..100 integer."""
+def derive_reference_policy(
+    design_freedom: int,
+    review_strictness: str = review_policy.DEFAULT_STRICTNESS,
+) -> dict:
+    """Return the versioned policy for a validated 0..100 integer.
+
+    `review_strictness` is independent of `design_freedom`: the first governs how
+    freely the concept is generated, the second how its differences are judged.
+    """
     if (
         isinstance(design_freedom, bool)
         or not isinstance(design_freedom, int)
@@ -131,9 +153,13 @@ def derive_reference_policy(design_freedom: int) -> dict:
     ):
         raise ValueError("designFreedom must be an integer from 0 through 100")
     mode = mode_for(design_freedom)
+    review = review_policy.derive_review_policy(review_strictness)
     return {
         "designFreedom": design_freedom,
         "policyVersion": POLICY_VERSION,
+        "reviewStrictness": review["reviewStrictness"],
+        "reviewPolicy": review,
+        "contentBoundary": list(review["contentBoundary"]),
         "mode": mode,
         "mustPreserve": list(_MUST_PRESERVE[mode]),
         "mayChange": list(_MAY_CHANGE[mode]),

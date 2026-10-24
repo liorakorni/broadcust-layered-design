@@ -1,0 +1,188 @@
+{
+ "checks": [
+  {
+   "anchorId": null,
+   "expectedPolicy": "Preserve the left-side headline, body, CTA and contact sequence, balanced against dominant right-side imagery.",
+   "feature": "Overall composition and reading flow",
+   "observed": "The concept retains the reference's overall arrangement and top-to-bottom reading flow. Text remains clearly separated from the main image.",
+   "passed": true
+  },
+  {
+   "anchorId": "full_bleed_background",
+   "expectedPolicy": "Maintain a full-bleed dark photographic background.",
+   "feature": "Background coverage and styling",
+   "observed": "Dark monochrome photography fills the square canvas, with strong black backing behind the left-side text.",
+   "passed": true
+  },
+  {
+   "anchorId": "dominant_image_right",
+   "expectedPolicy": "Keep the dominant image region approximately within x=0.55–1.00 and y=0.06–0.94, preserving its right-edge crop and visual role.",
+   "feature": "Dominant image placement, scale and edge cropping",
+   "observed": "The dominant photographic region occupies the right side at comparable scale, begins near the upper image anchor and extends toward the bottom accent. Right-edge cropping and the balance against the text are preserved.",
+   "passed": true
+  },
+  {
+   "anchorId": "dark_text_backing_left",
+   "expectedPolicy": "Preserve broad dark backing across the left text region, blending into the photograph.",
+   "feature": "Text-backing geometry and overlap",
+   "observed": "The left region remains dark and blends into the image without introducing a new hard-edged panel. The photograph does not impair text contrast.",
+   "passed": true
+  },
+  {
+   "anchorId": "headline_upper_left",
+   "expectedPolicy": "Retain an oversized white-outline headline near x=0.10, y=0.143, spanning approximately half the canvas width.",
+   "feature": "Primary headline placement and treatment",
+   "observed": "The outlined Hebrew primary title occupies approximately x=0.09–0.59 and y=0.14–0.26, preserving its dominant scale and styling.",
+   "passed": true
+  },
+  {
+   "anchorId": "headline_second_line_left",
+   "expectedPolicy": "Keep a bold yellow second headline directly below the outlined title at comparable relative width.",
+   "feature": "Secondary headline placement and hierarchy",
+   "observed": "The yellow Hebrew second line sits directly beneath the primary title and spans approximately the same width. Its weight and emphasis preserve the two-tier headline hierarchy.",
+   "passed": true
+  },
+  {
+   "anchorId": "body_middle_left",
+   "expectedPolicy": "Keep readable white supporting copy in the middle-left region, clearly subordinate to the headlines.",
+   "feature": "Body placement and relative text scale",
+   "observed": "Both Hebrew paragraphs appear in the middle-left region, beginning around y=0.43. Localized line wrapping and paragraph spacing accommodate the supplied copy while preserving hierarchy.",
+   "passed": true
+  },
+  {
+   "anchorId": "cta_capsule_lower_left",
+   "expectedPolicy": "Preserve the yellow rounded capsule near x=0.102, y=0.744, allowing localized fitting for the approved CTA.",
+   "feature": "CTA geometry and placement",
+   "observed": "The yellow capsule retains its lower-left position and approximately its original height. It is widened to accommodate the longer Hebrew CTA without crowding the contact rows or impairing the composition.",
+   "passed": true
+  },
+  {
+   "anchorId": "contact_rows_lower_left",
+   "expectedPolicy": "Keep two smaller white contact rows beneath the CTA, each with a yellow circular icon.",
+   "feature": "Contact-row placement and hierarchy",
+   "observed": "Phone and email rows remain beneath the CTA around y=0.83–0.90, with yellow circular icons and smaller white text.",
+   "passed": true
+  },
+  {
+   "anchorId": "irregular_accent_top_left",
+   "expectedPolicy": "Preserve the irregular yellow edge accent entering from the upper-left corner.",
+   "feature": "Top-left accent geometry",
+   "observed": "The irregular yellow accent follows the same upper-left diagonal edge region and remains subordinate to the headline.",
+   "passed": true
+  },
+  {
+   "anchorId": "irregular_accent_bottom_right",
+   "expectedPolicy": "Preserve the irregular yellow boundary and black lower panel rising toward the right edge.",
+   "feature": "Bottom accent geometry and image overlap",
+   "observed": "The lower black panel and yellow irregular boundary span approximately x=0.39–1.00 and y=0.83–1.00, overlapping the photograph in the same visual role.",
+   "passed": true
+  },
+  {
+   "anchorId": "stacked_chevrons_upper_right",
+   "expectedPolicy": "Maintain the vertical stack of alternating outlined and filled yellow chevrons.",
+   "feature": "Upper-right decorative stack",
+   "observed": "Five alternating outlined and filled chevrons occupy the upper-right anchor at comparable size and spacing.",
+   "passed": true
+  },
+  {
+   "anchorId": "four_dot_accent_lower_right",
+   "expectedPolicy": "Maintain a small two-by-two yellow dot accent near x=0.683, y=0.812.",
+   "feature": "Lower-right dot accent",
+   "observed": "The four-dot accent remains near the recorded anchor, over the lower photographic region and above the bottom boundary.",
+   "passed": true
+  },
+  {
+   "anchorId": null,
+   "expectedPolicy": "Preserve oversized outlined primary type, bold yellow secondary type, smaller white body copy, a bold CTA and subordinate contact text.",
+   "feature": "Typography hierarchy and relative scale",
+   "observed": "The concept preserves this hierarchy and the reference's condensed, heavy headline character, with localized Hebrew fitting.",
+   "passed": true
+  }
+ ],
+ "constraintConflict": {
+  "conflicted": false,
+  "reason": null
+ },
+ "copyChecks": [
+  {
+   "contentKey": "business.name",
+   "correct": false,
+   "observed": "FIT HOME is not visible anywhere in the concept; its planned upper-left position is empty.",
+   "present": false,
+   "readable": false
+  },
+  {
+   "contentKey": "title.primary",
+   "correct": true,
+   "observed": "The outlined headline reads exactly \"אימון אישי\".",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "title.secondary",
+   "correct": true,
+   "observed": "The yellow headline reads exactly \"אצלכם בבית\".",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "body.primary",
+   "correct": true,
+   "observed": "The first paragraph reads \"אימוני כושר בהתאמה אישית לרמה, למטרות ולשגרה שלכם.\" across two clear lines.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "body.secondary",
+   "correct": true,
+   "observed": "The second paragraph reads \"ליווי אישי, טכניקה נכונה והתמדה לאורך הדרך.\" across two clear lines.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "cta.primary",
+   "correct": true,
+   "observed": "The capsule reads exactly \"לתיאום אימון היכרות\" in legible black type.",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "contact.phone",
+   "correct": true,
+   "observed": "The phone row reads exactly \"050-1234567\".",
+   "present": true,
+   "readable": true
+  },
+  {
+   "contentKey": "contact.email",
+   "correct": true,
+   "observed": "The email row reads exactly \"info@fithome.example\".",
+   "present": true,
+   "readable": true
+  }
+ ],
+ "documentedExceptions": [
+  "Source marketing and contact copy is replaced with the supplied Hebrew copy and target contact details, except for the missing business identity reported below.",
+  "Hebrew headline and paragraph fitting preserves the reference's typographic treatments while adapting glyph proportions, line wrapping and paragraph spacing.",
+  "The CTA capsule is locally widened to fit the approved Hebrew wording.",
+  "An envelope icon replaces the source website icon to match the supplied email contact."
+ ],
+ "issues": [
+  {
+   "affected": "business.name",
+   "category": "content",
+   "code": "MISSING_BUSINESS_NAME",
+   "impact": "The mandatory business identity is absent, leaving the concept without the approved FIT HOME branding.",
+   "region": {
+    "height": 0.03,
+    "width": 0.3,
+    "x": 0.1,
+    "y": 0.095
+   },
+   "severity": "blocking",
+   "suggestion": "Add editable, legible text reading exactly \"FIT HOME\" in the planned upper-left business-name position, retaining the existing headline hierarchy."
+  }
+ ],
+ "mode": "strict-adherence",
+ "suggestions": []
+}

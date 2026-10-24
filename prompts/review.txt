@@ -4,7 +4,14 @@ Image 1: the approved concept (internal target, NOT the deliverable).
 Image 2: the current render at native size.
 Image 3: the current render scaled to a 360px-wide feed view.
 
-Evaluate and report BLOCKING issues only for things that are genuinely wrong:
+{severity_block}
+
+Report each finding with the structured fields below. Judge what a difference
+DOES to the design, not how different it is: a small difference in position,
+spacing or size, a minor decorative variation, or a natural photographic
+difference that keeps the visual balance is a WARNING, not a blocking issue.
+
+Report BLOCKING issues only for things that are genuinely wrong:
 - Text that is clipped, overflowing, overlapping another layer, or unreadable
   against its background.
 - Text that does not match the approved copy below, or facts that were invented.
@@ -17,8 +24,9 @@ Evaluate and report BLOCKING issues only for things that are genuinely wrong:
 
 The render must faithfully reconstruct the approved concept: its panel, silhouette
 and subject placement, hierarchy and visual character. Raise a blocking issue
-when the render drifts from the approved concept or replaces it with a generic
-layout. This applies at every designFreedom value, including the highest.
+when the render MATERIALLY drifts from the approved concept (composition,
+hierarchy, emphasis) or replaces it with a generic layout; small drift is a
+warning. This applies at every designFreedom value, including the highest.
 
 Small pictogram icons (a phone, envelope, plane and similar) are optional: they
 are omitted when no licensed icon set is configured, so their absence is NOT a
@@ -40,5 +48,11 @@ them. Otherwise set it to false.
 APPROVED COPY (the only legitimate text):
 {copy_block}
 
-Return strict JSON: passed, blockingIssues (each with code, layerId, assetId,
-message), suggestions and conceptDefect. Use null for layerId or assetId when not applicable.
+Return strict JSON: passed, blockingIssues, warnings, suggestions and conceptDefect.
+Both blockingIssues and warnings hold entries with: code (short UPPER_SNAKE),
+layerId and assetId (null when not applicable), message, category ("visual",
+"content" or "technical"), severity ("blocking" or "warning"), affected (the
+element or constraint concerned), impact (what the difference actually does to
+the design - a blocking visual finding without a stated impact is treated as a
+warning), suggestion (the targeted correction when one is needed, else null) and
+region (the normalized box where the problem is, or null).

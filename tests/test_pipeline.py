@@ -188,6 +188,14 @@ SCENE = {
 
 
 REFERENCE_ANALYSIS = {
+    "copyPlacements": [
+        {"contentKey": "title.primary", "basis": "headline zone",
+         "box": {"x": 0.1, "y": 0.14, "width": 0.7, "height": 0.16}},
+        {"contentKey": "subtitle.primary", "basis": "secondary zone",
+         "box": {"x": 0.1, "y": 0.31, "width": 0.7, "height": 0.08}},
+        {"contentKey": "contact.phone", "basis": "footer zone",
+         "box": {"x": 0.1, "y": 0.9, "width": 0.3, "height": 0.05}},
+    ],
     "anchors": [
         {"id": "hero", "kind": "dominantImage",
          "box": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 0.7},
@@ -206,23 +214,62 @@ REFERENCE_ANALYSIS = {
 }
 
 
-def concept_verdict(prompt=None, *, passed=True, issues=(), conflict=None,
-                    mode="strict-adherence", checks=()):
-    """A well-formed concept_review_v1 payload."""
+def default_checks():
+    """One passing structural check per 'must preserve' item of the strict policy."""
+    return [
+        {"anchorId": anchor, "feature": feature, "expectedPolicy": "preserve",
+         "observed": "matches", "passed": True}
+        for anchor, feature in (
+            (None, "composition"), ("hero", "dominant image region"),
+            ("panel", "panel geometry"), (None, "typography hierarchy"),
+        )
+    ]
+
+
+def copy_checks(items=COPY_ITEMS, *, missing=(), wrong=(), unreadable=()):
+    """One copyChecks entry per approved item; `missing` items are absent."""
+    return [
+        {"contentKey": i["contentKey"],
+         "present": i["contentKey"] not in missing,
+         "correct": i["contentKey"] not in wrong,
+         "readable": i["contentKey"] not in unreadable,
+         "observed": "seen" if i["contentKey"] not in missing else "not found"}
+        for i in items
+    ]
+
+
+def concept_verdict(prompt=None, *, passed=None, issues=(), conflict=None,
+                    mode="strict-adherence", checks=None, copy=None,
+                    missing_copy=()):
+    """A well-formed concept_review_v2 payload.
+
+    `passed` is accepted so older call sites keep reading naturally, but v2 has no
+    model-asserted pass flag: the backend decides from the evidence.
+    """
     return {
-        "passed": passed,
         "mode": mode,
-        "checks": list(checks),
+        "checks": default_checks() if checks is None else list(checks),
+        "copyChecks": copy_checks(missing=missing_copy) if copy is None else list(copy),
         "documentedExceptions": ["business name replaced"],
-        "blockingIssues": list(issues),
+        "issues": list(issues),
         "suggestions": [],
         "constraintConflict": {"conflicted": bool(conflict), "reason": conflict},
     }
 
 
-def layout_issue(message="Hero image moved to the left."):
-    return {"code": "ANCHOR_DISPLACED", "category": "layoutAdherence",
-            "message": message}
+def layout_issue(message="Hero image moved to the left.", *, severity="blocking",
+                 code="ANCHOR_DISPLACED", impact=None, region=None):
+    """A visual finding. Blocking by default, as the old layoutAdherence issue was."""
+    return {"code": code, "category": "visual", "severity": severity,
+            "affected": "hero",
+            "impact": impact or "The dominant image no longer carries the composition.",
+            "suggestion": message, "region": region}
+
+
+def content_issue(key="contact.phone", *, code="MISSING_REQUIRED_COPY"):
+    return {"code": code, "category": "content", "severity": "blocking",
+            "affected": key, "impact": f"{key} is not in the design.",
+            "suggestion": f"Add {key}.", "region": None}
 
 
 @pytest.fixture
@@ -277,13 +324,13 @@ def pipeline(monkeypatch):
             return {"displaced": False, "description": ""}
         if schema_name == "reference_analysis_v1":
             return json.loads(json.dumps(REFERENCE_ANALYSIS))
-        if schema_name == "concept_review_v1":
+        if schema_name == "concept_review_v2":
             if concept_verdicts:
                 return concept_verdicts.pop(0)
             return concept_verdict(prompt)
         if schema_name == "review_v1":
-            return {"passed": True, "blockingIssues": [], "suggestions": [],
-                    "conceptDefect": False}
+            return {"passed": True, "blockingIssues": [], "warnings": [],
+                    "suggestions": [], "conceptDefect": False}
         raise AssertionError(f"unexpected schema {schema_name}")
 
     monkeypatch.setattr(vision_provider, "analyze", fake_analyze)
@@ -640,9 +687,12 @@ def test_a_saved_design_and_its_dependencies_are_retained(pipeline):
     for key in must_keep:
         assert tags[key] == "lifecycle=retained", key
 
+    # The selected concept is what the result's selection record points at, so it
+    # is kept with the design.
+    assert tags[produced[Stage.CONCEPT]["concept"]] == "lifecycle=retained"
+
     # Working artifacts of a finished design still expire.
-    concept = produced[Stage.CONCEPT]["concept"]
-    assert tags[concept] == "lifecycle=temporary"
+    assert tags[produced[Stage.PREPARE_COPY]["copy"]] == "lifecycle=temporary"
     assert "expiresAt" not in job
 
 

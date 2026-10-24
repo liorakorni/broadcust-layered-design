@@ -99,7 +99,11 @@ def repair_overlay(job_id, attempt, asset_id=None):
         job_id,
         Stage.DECORATION_OVERLAY,
         attempt,
-        {"decoration": stored["key"], "sha256": stored["sha256"]},
+        {
+            "decoration": stored["key"],
+            "sha256": stored["sha256"],
+            "conceptSha256": artifacts.sha256_hex(concept),
+        },
     )
     return {
         "decoration": stored["key"],
@@ -159,7 +163,11 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False):
         job_id,
         Stage.CLEAN_PHOTO,
         attempt,
-        {"background": stored["key"], "sha256": stored["sha256"]},
+        {
+            "background": stored["key"],
+            "sha256": stored["sha256"],
+            "conceptSha256": artifacts.sha256_hex(concept),
+        },
     )
     return {
         "background": stored["key"],
@@ -191,7 +199,14 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
     key = artifacts.artifact_key(job_id, stage, attempt, artifact_name)
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
     jobs.record_artifacts(
-        job_id, stage, attempt, {label: stored["key"], "sha256": stored["sha256"]}
+        job_id,
+        stage,
+        attempt,
+        {
+            label: stored["key"],
+            "sha256": stored["sha256"],
+            "conceptSha256": artifacts.sha256_hex(concept),
+        },
     )
     return {
         label: stored["key"],

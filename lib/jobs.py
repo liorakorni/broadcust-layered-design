@@ -126,9 +126,13 @@ def job_exists(job_id):
 
 
 def create_job(job_id, owner_scope, request_hash, request_key, canvas,
-               design_freedom=0):
+               design_freedom=0, review_strictness=None):
     """Record the job as QUEUED before any execution starts."""
-    from lib import reference_policy
+    from lib import reference_policy, review_policy
+
+    if review_strictness is None:
+        review_strictness = review_policy.DEFAULT_STRICTNESS
+    review_strictness = review_policy.validate_strictness(review_strictness)
 
     _tbl().put_item(
         Item={
@@ -152,7 +156,12 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
             # is false when the attribute is absent, which would read as exhausted.
             "conceptRounds": 0,
             "designFreedom": design_freedom,
+            "reviewStrictness": review_strictness,
             "policyVersion": reference_policy.POLICY_VERSION,
+            # Every concept attempt and where its review stands, keyed by attempt.
+            # Seeded for the same reason as the maps above: a nested write to a
+            # missing parent is rejected.
+            "conceptCandidates": {},
             "createdAt": _now(),
             "updatedAt": _now(),
             "expiresAt": _ttl(),
@@ -253,6 +262,50 @@ def freeze_concept(job_id, approved):
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET approvedConcept = :c, updatedAt = :now",
         ExpressionAttributeValues={":c": approved, ":now": _now()},
+    )
+
+
+def record_concept_candidate(job_id, attempt, record):
+    """Store one concept candidate and its current review under its attempt.
+
+    Candidates are kept separately from the stage pointers, which only ever hold
+    the latest attempt: selection compares them all, so each must stay reachable.
+    """
+    try:
+        _write_candidate(job_id, attempt, record)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ValidationException":
+            raise
+        # A job created before candidates were tracked has no parent map.
+        _tbl().update_item(
+            Key={"pk": f"JOB#{job_id}"},
+            UpdateExpression="SET conceptCandidates = :m, updatedAt = :now",
+            ExpressionAttributeValues={":m": {}, ":now": _now()},
+        )
+        _write_candidate(job_id, attempt, record)
+
+
+def _write_candidate(job_id, attempt, record):
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET conceptCandidates.#a = :r, updatedAt = :now",
+        ExpressionAttributeNames={"#a": str(int(attempt))},
+        ExpressionAttributeValues={":r": record, ":now": _now()},
+    )
+
+
+def concept_candidates(job):
+    """All recorded candidates, ordered by attempt."""
+    found = job.get("conceptCandidates") or {}
+    return [found[k] for k in sorted(found, key=int)]
+
+
+def set_concept_correction(job_id, correction):
+    """Point the next CONCEPT attempt at the correction plan it must follow."""
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET conceptCorrection = :c, updatedAt = :now",
+        ExpressionAttributeValues={":c": correction, ":now": _now()},
     )
 
 

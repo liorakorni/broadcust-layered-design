@@ -108,30 +108,52 @@ SPEC 7.5's `final/` key paths are illustrative. Decisions:
    `htmlHash` and `assetManifestHash`. Approval needs passing checks and zero
    blocking issues; a check that did not run is reported `missing` and blocks.
 
-### designFreedom and the concept loop (SPEC 2.7, ANALYZE_REFERENCE, REVIEW_CONCEPT)
+### designFreedom, reviewStrictness and the concept loop (SPEC 2.7, ANALYZE_REFERENCE, REVIEW_CONCEPT)
 
 Pipeline: `PREFLIGHT -> PREPARE_COPY -> ANALYZE_REFERENCE -> CONCEPT ->
-REVIEW_CONCEPT -> EXTRACT_SCENE -> ... -> REVIEW -> FINALIZE`.
+REVIEW_CONCEPT -> [CorrectConcept -> CONCEPT]* | SelectConcept -> EXTRACT_SCENE ->
+... -> REVIEW -> FINALIZE`.
 
-- `designFreedom` is an integer 0..100, default 0, part of the canonical request
-  hash. The job stores `designFreedom` and `policyVersion` (`"1.0"`).
-- ANALYZE_REFERENCE writes `policy.json` and `reference-analysis.json` once.
-- REVIEW_CONCEPT writes `concept-review.json` per attempt. The backend computes
-  approval. An unresolvable conflict raises `REFERENCE_CONSTRAINT_CONFLICT`
-  immediately; otherwise an unapproved concept consumes one of `MAX_CONCEPT_ROUNDS`
-  (2) and `CONCEPT` runs again at the next attempt, with targeted repair text. The
-  budget (`conceptRounds`) is separate from `correctionRounds`. When it is spent
-  the job ends with `REFERENCE_ADHERENCE_FAILED`.
-- **Frozen concept.** An approved concept is recorded on the job as
-  `approvedConcept {key, sha256, attempt, reviewKey, designFreedom, policyVersion}`.
-  EXTRACT_SCENE, both separation branches and REVIEW read it, never the latest
-  `CONCEPT` artifact, so both branches edit the same bytes after a regeneration.
-  A later attempt supersedes it, which invalidates scene, assets, render and QA.
+- `designFreedom` is an integer 0..100, default 0. `reviewStrictness` is a string,
+  default `"balanced"` (the only supported level). The job stores both and
+  `policyVersion` (`"2.0"`). `designFreedom` is part of the canonical request hash;
+  `reviewStrictness` is excluded from it while it equals the default.
+- ANALYZE_REFERENCE writes `policy.json` (including `reviewStrictness` and
+  `reviewPolicy`) and `reference-analysis.json` (content-neutral `anchors`,
+  `copyPlacements`, `policyVersion`) once. Stages refuse any stored policy or
+  analysis whose `policyVersion` is not current: `POLICY_VERSION_MISMATCH`.
+- CONCEPT attempt 1 generates from the reference. Attempt N>1 reads
+  `job.conceptCorrection {forAttempt, planKey}` and edits the planned base candidate
+  (`REVIEW_CONCEPT/<n>/correction-plan.json`); without a plan it fails rather than
+  regenerating. It writes `concept.png`, `concept-provider-output.png` (the provider's
+  untouched output), `correction.json` and, when masked, `correction-mask.png`.
+- REVIEW_CONCEPT writes `concept-review.json` per attempt (schema 2.0: `eligible`,
+  `copyChecks`, `requiredChecks`, `issues`, `blockingIssues`, `warnings`,
+  `structuralFailures`, `regressions`, the raw `verdict`) and a candidate record under
+  `job.conceptCandidates[<attempt>]`. Its result carries `approved` (= eligible) and
+  `correctionAvailable`. Conflict raises `REFERENCE_CONSTRAINT_CONFLICT`; a review that
+  skipped a required check raises `INVALID_MODEL_JSON` (retried).
+- Not eligible and `correctionAvailable`: `CORRECT_CONCEPT` consumes one of
+  `MAX_CONCEPT_ROUNDS` (2) and plans the edit. Not eligible and no round left:
+  `SELECT_CONCEPT` picks the best eligible stored candidate or fails with
+  `REQUIRED_COPY_MISSING` (category `content`) / `REFERENCE_ADHERENCE_FAILED`
+  (category `reference-adherence`). The budget (`conceptRounds`) is separate from
+  `correctionRounds`.
+- **Frozen concept.** The selected candidate is recorded on the job as
+  `approvedConcept {key, sha256, attempt, reviewKey, designFreedom, policyVersion,
+  reviewStrictness, selectedBy, selectionReason, selectionKey}`. EXTRACT_SCENE, both
+  separation branches, VALIDATE_ASSETS and REVIEW read it, never the latest `CONCEPT`
+  artifact, and record `conceptSha256`, which FINALIZE checks.
 - REVIEW reports `conceptDefect` when its blockers come from the approved concept
-  itself. It is honoured only while a concept round remains; otherwise the
-  ordinary HTML correction runs.
-- `result.json` and `qa` carry `designFreedom`, `policyVersion`, `conceptRounds`
-  and the concept review (`key`, `passed`, `mode`, `documentedExceptions`).
+  itself. It is honoured only while a concept round remains; the correction then edits
+  the approved candidate and that candidate is never selected again.
+- Errors carry an additive `category` (`content`, `reference-adherence`,
+  `asset-validation`, `technical`) beside the unchanged `code`.
+- `result.json` and `qa` carry `designFreedom`, `reviewStrictness`, `policyVersion`,
+  `conceptRounds`, `conceptSelection {attempt, key, sha256, policyVersion, selectedBy,
+  reason, selectionKey}`, the concept review (`key`, `passed`, `mode`,
+  `documentedExceptions`, `requiredChecks`) and `warnings` (non-blocking findings
+  from both reviews: `{stage, code, category, affected, impact, suggestion}`).
 
 ## 4. Error shape
 
@@ -142,11 +164,12 @@ Identical for API rejections, stage failures and failed-job status:
   "stage": "DECORATION_OVERLAY",
   "code": "INVALID_TRANSPARENCY",
   "message": "The decoration image is fully opaque",
-  "retryable": false
+  "retryable": false,
+  "category": "asset-validation"
 }
 ```
 
-Stage names come from `lib.errors.Stage`, codes from `lib.errors.Code`. `message` is
+Stage names come from `lib.errors.Stage`, codes from `lib.errors.Code`. `category` (`content`, `reference-adherence`, `asset-validation` or `technical`) is an additive field naming the kind of failure; it never changes what a `code` means. `message` is
 caller-visible: no secrets, signed URLs or raw provider payloads.
 
 ## 5. HTML nesting

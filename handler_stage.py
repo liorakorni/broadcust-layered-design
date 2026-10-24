@@ -121,6 +121,19 @@ def handler(event, context):
         _log(job_id, Stage.REVIEW_CONCEPT, attempt, started)
         return {"ok": True, "stage": Stage.REVIEW_CONCEPT, "artifacts": artifacts}
 
+    if event.get("operation") == "SELECT_CONCEPT":
+        from lib.stages import review_concept
+
+        try:
+            artifacts = review_concept.select_concept(job_id=job_id, attempt=attempt)
+        except LayeredDesignError as exc:
+            if Stage.REVIEW_CONCEPT not in exc.message:
+                exc.message = f"{exc.message} [{Stage.REVIEW_CONCEPT}]"
+                exc.args = (exc.message,)
+            raise
+        _log(job_id, Stage.REVIEW_CONCEPT, attempt, started)
+        return {"ok": True, "stage": Stage.REVIEW_CONCEPT, "artifacts": artifacts}
+
     if stage not in Stage.PIPELINE:
         raise LayeredDesignError(
             f"Unknown stage {stage!r}.",
@@ -173,6 +186,7 @@ def _record_failure(job_id, failure):
         "code": Code.INTERNAL,
         "message": "The job failed.",
         "retryable": False,
+        "category": "technical",
     }
     if isinstance(failure, dict):
         name = failure.get("Error") or ""
@@ -186,6 +200,7 @@ def _record_failure(job_id, failure):
         if raised is not None:
             error["code"] = raised.code
             error["retryable"] = raised.retryable
+            error["category"] = raised.category
         if message:
             error["message"] = message
         stage = _stage_from_message(message)

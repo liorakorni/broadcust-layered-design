@@ -1,0 +1,260 @@
+{
+ "alignment": "The main text column, CTA, and contact markers share a left edge near x=0.10. The headline spans roughly 49% of the canvas width, while the paragraph spans about 42.5%. The reference paragraph has visibly expanded word spacing and approximately aligned left and right edges. Contact text begins farther right at x=0.139. The CTA text is centered. Preserve these column positions for the Hebrew adaptation, using right-to-left text handling within the existing boxes rather than mirroring the composition.",
+ "anchors": [
+  {
+   "box": {
+    "height": 0.89,
+    "width": 0.65,
+    "x": 0.35,
+    "y": 0.06
+   },
+   "confidence": 0.93,
+   "id": "dominant_image_right",
+   "kind": "dominantImage",
+   "relativeScale": 0.5785
+  },
+  {
+   "box": {
+    "height": 1.0,
+    "width": 0.61,
+    "x": 0.0,
+    "y": 0.0
+   },
+   "confidence": 0.86,
+   "id": "dark_backing_left",
+   "kind": "graphicPanel",
+   "relativeScale": 0.61
+  },
+  {
+   "box": {
+    "height": 0.12,
+    "width": 0.49,
+    "x": 0.1,
+    "y": 0.142
+   },
+   "confidence": 0.99,
+   "id": "headline_outline_upper_left",
+   "kind": "textZone",
+   "relativeScale": 0.0588
+  },
+  {
+   "box": {
+    "height": 0.08,
+    "width": 0.487,
+    "x": 0.1,
+    "y": 0.28
+   },
+   "confidence": 0.99,
+   "id": "headline_fill_upper_left",
+   "kind": "textZone",
+   "relativeScale": 0.039
+  },
+  {
+   "box": {
+    "height": 0.22,
+    "width": 0.425,
+    "x": 0.1,
+    "y": 0.425
+   },
+   "confidence": 0.99,
+   "id": "paragraph_middle_left",
+   "kind": "textZone",
+   "relativeScale": 0.0935
+  },
+  {
+   "box": {
+    "height": 0.067,
+    "width": 0.234,
+    "x": 0.102,
+    "y": 0.744
+   },
+   "confidence": 0.99,
+   "id": "cta_capsule_lower_left",
+   "kind": "graphicPanel",
+   "relativeScale": 0.0157
+  },
+  {
+   "box": {
+    "height": 0.07,
+    "width": 0.325,
+    "x": 0.1,
+    "y": 0.83
+   },
+   "confidence": 0.99,
+   "id": "contact_rows_lower_left",
+   "kind": "textZone",
+   "relativeScale": 0.0228
+  },
+  {
+   "box": {
+    "height": 0.128,
+    "width": 0.297,
+    "x": 0.0,
+    "y": 0.0
+   },
+   "confidence": 0.96,
+   "id": "irregular_accent_top_left",
+   "kind": "graphicPanel",
+   "relativeScale": 0.038
+  },
+  {
+   "box": {
+    "height": 0.165,
+    "width": 0.614,
+    "x": 0.386,
+    "y": 0.835
+   },
+   "confidence": 0.98,
+   "id": "irregular_accent_bottom_right",
+   "kind": "graphicPanel",
+   "relativeScale": 0.1013
+  },
+  {
+   "box": {
+    "height": 0.192,
+    "width": 0.052,
+    "x": 0.9,
+    "y": 0.053
+   },
+   "confidence": 0.99,
+   "id": "stacked_chevrons_upper_right",
+   "kind": "other",
+   "relativeScale": 0.01
+  },
+  {
+   "box": {
+    "height": 0.051,
+    "width": 0.051,
+    "x": 0.683,
+    "y": 0.812
+   },
+   "confidence": 0.99,
+   "id": "four_dot_accent_lower_right",
+   "kind": "other",
+   "relativeScale": 0.0026
+  }
+ ],
+ "copyPlacements": [
+  {
+   "basis": "No separate business-name counterpart is visible. Use the clear dark space immediately above the headline, in small subordinate type, without moving the existing zones.",
+   "box": {
+    "height": 0.026,
+    "width": 0.3,
+    "x": 0.1,
+    "y": 0.102
+   },
+   "contentKey": "business.name"
+  },
+  {
+   "basis": "Use the reference's largest headline line: tall, heavy condensed sans character with a white outline and dark interior. Adapt the lettering to Hebrew while preserving its dominant scale.",
+   "box": {
+    "height": 0.12,
+    "width": 0.49,
+    "x": 0.1,
+    "y": 0.142
+   },
+   "contentKey": "title.primary"
+  },
+  {
+   "basis": "Use the second headline line, filled yellow and visibly shorter in height than the outlined first line.",
+   "box": {
+    "height": 0.08,
+    "width": 0.487,
+    "x": 0.1,
+    "y": 0.28
+   },
+   "contentKey": "title.secondary"
+  },
+  {
+   "basis": "Occupy the upper portion of the existing white paragraph zone. Wrap the supplied Hebrew naturally within the unchanged left-side text column.",
+   "box": {
+    "height": 0.112,
+    "width": 0.425,
+    "x": 0.1,
+    "y": 0.425
+   },
+   "contentKey": "body.primary"
+  },
+  {
+   "basis": "Use the lower portion of the same paragraph zone, with a modest gap from the primary body copy and the same regular sans styling.",
+   "box": {
+    "height": 0.097,
+    "width": 0.425,
+    "x": 0.1,
+    "y": 0.548
+   },
+   "contentKey": "body.secondary"
+  },
+  {
+   "basis": "Center bold black text inside the existing yellow capsule. Reduce lettering size only as necessary for the longer supplied CTA; preserve capsule geometry.",
+   "box": {
+    "height": 0.039,
+    "width": 0.204,
+    "x": 0.117,
+    "y": 0.758
+   },
+   "contentKey": "cta.primary"
+  },
+  {
+   "basis": "Replace the first contact row, retaining the white text and the yellow circular marker to its left. Keep the number left-to-right.",
+   "box": {
+    "height": 0.029,
+    "width": 0.285,
+    "x": 0.139,
+    "y": 0.833
+   },
+   "contentKey": "contact.phone"
+  },
+  {
+   "basis": "Use the second contact row, replacing the reference's web-address role with the supplied email. Retain the row geometry and yellow marker styling; fit the email on one line.",
+   "box": {
+    "height": 0.029,
+    "width": 0.285,
+    "x": 0.139,
+    "y": 0.872
+   },
+   "contentKey": "contact.email"
+  }
+ ],
+ "hierarchy": [
+  "headline_outline_upper_left",
+  "headline_fill_upper_left",
+  "dominant_image_right",
+  "paragraph_middle_left",
+  "cta_capsule_lower_left",
+  "contact_rows_lower_left",
+  "Supplementary business name above the headline",
+  "Peripheral yellow accents"
+ ],
+ "notes": "The reference is square, matching the target aspect ratio; normalized geometry can map directly to 1080×1080. Anchor areas describe bounding rectangles, not the amount of painted color inside irregular accents. No distinct logo or separate business-name zone is visible. Necessary adaptations are the added small business-name line, Hebrew-compatible typography and right-to-left handling inside the original left-side layout, splitting the paragraph zone between two supplied body items, fitting the longer CTA within the original capsule, and replacing the second contact row with an email. Preserve the right-side image region's visual weight, dark integration, and edge cropping without requiring the reference's depicted content or exact internal silhouette. All source wording and identity must be replaced.",
+ "overlaps": [
+  "The monochrome photographic background extends beneath the composition; its visually dominant region occupies the right side and reaches the right edge.",
+  "The left dark backing blends into the photograph rather than forming a visibly hard-edged rectangular panel.",
+  "Both headline lines and the paragraph sit above the darkened background; the headline extends farther right than the paragraph.",
+  "The yellow CTA capsule overlays the dark background, with black CTA lettering above the capsule.",
+  "The stacked chevrons and four-dot accent overlay the background in the right-side image region.",
+  "The irregular yellow edge accents sit above the background. The lower accent separates the photograph from a black corner area and exits through the bottom and right edges."
+ ],
+ "palette": [
+  "#030303",
+  "#151515",
+  "#737373",
+  "#FFFFFF",
+  "#FFD62A",
+  "#F2C600"
+ ],
+ "policyVersion": "2.0",
+ "readingFlow": "The eye first encounters the oversized outlined headline, then the solid yellow headline below it. The bright right-side image balances this upper-left text mass. Reading continues downward through the white paragraph, across the generous dark gap to the yellow CTA, and then through the two contact rows. The upper-right downward chevrons reinforce the vertical flow, while the irregular yellow edge accents frame the composition.",
+ "visualQualities": [
+  "Square, full-bleed composition with a dark photographic background.",
+  "High-contrast monochrome imagery, bright directional highlights, deep shadows, and subdued background detail.",
+  "Large near-black negative space behind the left-side copy maintains legibility.",
+  "Tall, very heavy condensed sans headline construction; the first line is white outline only and the second is solid yellow.",
+  "Regular-weight white sans body text with substantially smaller contact typography.",
+  "Bold black CTA lettering on a wide yellow capsule with fully rounded ends and a subtle yellow tonal variation.",
+  "Five downward chevrons alternate thin yellow outlines and thick yellow fills.",
+  "Four small yellow circles form a two-by-two grid near the lower-right center.",
+  "Irregular yellow edge strips provide a rough contrast to the clean typography and capsule.",
+  "Assertive, dramatic visual mood with minimal color and strong scale contrast."
+ ]
+}

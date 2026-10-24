@@ -97,7 +97,7 @@ def test_band_boundaries(value, mode):
     policy = reference_policy.derive_reference_policy(value)
     assert policy["mode"] == mode
     assert policy["designFreedom"] == value
-    assert policy["policyVersion"] == "1.0"
+    assert policy["policyVersion"] == "2.0"
 
 
 @pytest.mark.parametrize("value", [-1, 101, True, 10.5, "10", None])
@@ -177,7 +177,7 @@ def test_direct_and_bedrock_paths_preserve_the_same_effective_value(start_payloa
     for job_id in (direct_id, agent_id):
         job = api["table"].items[f"JOB#{job_id}"]
         assert job["designFreedom"] == 40
-        assert job["policyVersion"] == "1.0"
+        assert job["policyVersion"] == "2.0"
 
 
 def test_an_omitted_value_is_persisted_as_zero(start_payload, api):
@@ -345,7 +345,7 @@ def test_an_approved_concept_is_frozen_with_its_review(pipeline):
     assert frozen["key"] == job_of(pipeline)["artifacts"][Stage.CONCEPT]["concept"]
     assert frozen["reviewKey"] == out["review"]
     assert frozen["designFreedom"] == 0
-    assert frozen["policyVersion"] == "1.0"
+    assert frozen["policyVersion"] == "2.0"
     review = artifacts.get_json(pipeline["jobId"], out["review"])
     assert review["conceptSha256"] == frozen["sha256"]
 
@@ -353,7 +353,7 @@ def test_an_approved_concept_is_frozen_with_its_review(pipeline):
 def test_review_concept_sends_reference_and_concept_pixels(pipeline):
     run_to_concept_review(pipeline)
     call = [c for c in pipeline["calls"]["vision"]
-            if c["schema"] == "concept_review_v1"][0]
+            if c["schema"] == "concept_review_v2"][0]
     assert call["images"] == 2
 
 
@@ -363,7 +363,7 @@ def test_strict_mode_unjustified_displacement_fails_review(pipeline):
     )
     out = run_to_concept_review(pipeline)
     assert out["approved"] is False
-    assert out["blockingIssues"][0]["category"] == "layoutAdherence"
+    assert out["blockingIssues"][0]["category"] == "visual"
     assert "approvedConcept" not in job_of(pipeline)
 
 
@@ -384,7 +384,7 @@ def test_a_model_passed_flag_cannot_override_blocking_issues(pipeline):
     assert run_to_concept_review(pipeline)["approved"] is False
 
 
-def test_layout_differences_are_not_blockers_at_one_hundred(pipeline):
+def test_reference_structure_departures_are_not_blockers_at_one_hundred(pipeline):
     set_freedom(pipeline, 100)
     pipeline["concept_verdicts"].append(
         concept_verdict(passed=False, issues=[layout_issue()], mode="free-composition")
@@ -395,7 +395,9 @@ def test_layout_differences_are_not_blockers_at_one_hundred(pipeline):
 def test_invented_content_still_blocks_at_one_hundred(pipeline):
     set_freedom(pipeline, 100)
     invented = {"code": "INVENTED_PRICE", "category": "content",
-                "message": "Shows a price that is not in the brief."}
+                "severity": "blocking", "affected": "price",
+                "impact": "Shows a price that is not in the brief.",
+                "suggestion": "Remove the price.", "region": None}
     pipeline["concept_verdicts"].append(
         concept_verdict(passed=False, issues=[invented, layout_issue()],
                         mode="free-composition")
@@ -433,11 +435,13 @@ def test_concept_repair_is_bounded_and_separate_from_html_rounds(pipeline):
     first = handler_stage.handler(
         {"jobId": job_id, "stage": Stage.REVIEW_CONCEPT, "attempt": 1,
          "assetId": None, "operation": "CORRECT_CONCEPT"}, None)
-    assert first["artifacts"] == {"round": 1, "nextAttempt": 2}
+    assert first["artifacts"]["round"] == 1
+    assert first["artifacts"]["nextAttempt"] == 2
     second = handler_stage.handler(
         {"jobId": job_id, "stage": Stage.REVIEW_CONCEPT, "attempt": 2,
          "assetId": None, "operation": "CORRECT_CONCEPT"}, None)
-    assert second["artifacts"] == {"round": 2, "nextAttempt": 3}
+    assert second["artifacts"]["round"] == 2
+    assert second["artifacts"]["nextAttempt"] == 3
     assert job_of(pipeline)["correctionRounds"] == 0
 
     with pytest.raises(ReferenceAdherenceFailed) as exc:
@@ -462,7 +466,7 @@ def test_the_effective_value_does_not_change_during_repairs(pipeline):
     assert job_of(pipeline)["designFreedom"] == 30
 
 
-def test_a_regenerated_concept_is_prompted_with_the_targeted_repair(
+def test_a_corrected_concept_is_prompted_with_the_targeted_correction(
         pipeline, monkeypatch):
     seen = capture_concept_prompts(monkeypatch)
     pipeline["concept_verdicts"].append(
@@ -473,13 +477,32 @@ def test_a_regenerated_concept_is_prompted_with_the_targeted_repair(
         {"jobId": pipeline["jobId"], "stage": Stage.REVIEW_CONCEPT, "attempt": 1,
          "assetId": None, "operation": "CORRECT_CONCEPT"}, None)
     run_stage(pipeline["jobId"], Stage.CONCEPT, attempt=2)
-    assert "FIX THESE PROBLEMS" not in seen[0]
+    # Attempt 1 generates; attempt 2 is a correction of attempt 1's candidate.
+    assert "TARGETED CORRECTION" not in seen[0]
+    assert "TARGETED CORRECTION" in seen[1]
     assert "Panel sits too high." in seen[1]
+    assert "PRESERVE EVERYTHING ELSE" in seen[1]
 
 
-def test_regenerating_the_concept_supersedes_the_frozen_one(pipeline):
+def _final_review_rejects_the_concept(pipeline, monkeypatch):
+    """Approve attempt 1, then have the final review blame the concept itself."""
+    _defect_review(monkeypatch)
+    job_id = pipeline["jobId"]
+    for stage in (Stage.EXTRACT_SCENE, Stage.DECORATION_OVERLAY, Stage.CLEAN_PHOTO,
+                  Stage.VALIDATE_ASSETS, Stage.ASSEMBLE, Stage.RENDER):
+        run_stage(job_id, stage)
+    out = run_stage(job_id, Stage.REVIEW)
+    assert out["conceptDefect"] is True
+    handler_stage.handler(
+        {"jobId": pipeline["jobId"], "stage": Stage.REVIEW_CONCEPT, "attempt": 1,
+         "assetId": None, "operation": "CORRECT_CONCEPT"}, None)
+
+
+def test_a_corrected_concept_supersedes_the_frozen_one_once_it_is_approved(
+        pipeline, monkeypatch):
     first = run_to_concept_review(pipeline)
     frozen_first = dict(job_of(pipeline)["approvedConcept"])
+    _final_review_rejects_the_concept(pipeline, monkeypatch)
     out = run_stage(pipeline["jobId"], Stage.CONCEPT, attempt=2)
     run_stage(pipeline["jobId"], Stage.REVIEW_CONCEPT, attempt=2)
     frozen_second = job_of(pipeline)["approvedConcept"]
@@ -495,18 +518,20 @@ def test_stages_after_the_review_refuse_an_unreviewed_concept(pipeline):
         run_stage(pipeline["jobId"], Stage.EXTRACT_SCENE)
 
 
-def test_separation_edits_the_frozen_concept_not_the_latest(pipeline):
+def test_separation_edits_the_frozen_concept_not_the_latest(pipeline, monkeypatch):
     job_id = pipeline["jobId"]
     run_to_concept_review(pipeline)
     frozen = job_of(pipeline)["approvedConcept"]["key"]
-    # A later, unreviewed concept must not be picked up by the branches.
+    # A later, unreviewed concept (a correction that has not been judged yet)
+    # must not be picked up by the branches.
+    _final_review_rejects_the_concept(pipeline, monkeypatch)
     run_stage(job_id, Stage.CONCEPT, attempt=2)
     assert job_of(pipeline)["artifacts"][Stage.CONCEPT]["concept"] != frozen
-    run_stage(job_id, Stage.EXTRACT_SCENE)
-    run_stage(job_id, Stage.DECORATION_OVERLAY)
-    run_stage(job_id, Stage.CLEAN_PHOTO)
-    sources = [c["source"] for c in pipeline["calls"]["image"]
-               if c["operationId"] and ":concept:" not in c["operationId"]]
+    pipeline["calls"]["image"].clear()
+    run_stage(job_id, Stage.EXTRACT_SCENE, attempt=2)
+    run_stage(job_id, Stage.DECORATION_OVERLAY, attempt=2)
+    run_stage(job_id, Stage.CLEAN_PHOTO, attempt=2)
+    sources = [c["source"] for c in pipeline["calls"]["image"]]
     assert sources and all(
         s == artifacts.get_bytes(job_id, frozen) for s in sources)
 
@@ -561,10 +586,10 @@ def test_result_and_qa_carry_the_effective_value_and_policy(pipeline):
     job = run_pipeline(pipeline)
     result = artifacts.get_json(pipeline["jobId"], job["resultKey"])
     assert result["designFreedom"] == 75
-    assert result["policyVersion"] == "1.0"
+    assert result["policyVersion"] == "2.0"
     qa = result["qa"]
     assert qa["designFreedom"] == 75
-    assert qa["policyVersion"] == "1.0"
+    assert qa["policyVersion"] == "2.0"
     assert qa["conceptRounds"] == 0
     assert qa["conceptReview"]["passed"] is True
     assert qa["conceptReview"]["mode"] == "broad-inspiration"

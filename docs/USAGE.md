@@ -62,6 +62,7 @@ from the shape of the request.
 | `brand.fontFamilies` | no | Must be installed in the renderer — currently `Heebo` and `Arial`. An unlisted font is rejected at PREFLIGHT rather than silently substituted. |
 | `suppliedAssets` | no | Up to 10 images you provide (`logo`, `photo`, `product`, `portrait`). These are used as-is and never regenerated. |
 | `designFreedom` | no | Integer 0-100: how far the design may depart from the reference. Default `0` (strictest). See below. |
+| `reviewStrictness` | no | How strictly differences are judged. Default and only supported value: `"balanced"`. Independent of `designFreedom`. See below. |
 | `requestId` | **yes** | Your idempotency key. See below. |
 
 **`trustedCallerContext.ownerScope`** establishes who owns the job. It must come
@@ -108,6 +109,27 @@ the concept prompt, the concept review and its repairs.
 
 The effective value and `policyVersion` come back in the result and in `qa`, with
 the concept review's mode and documented exceptions.
+
+### `reviewStrictness`
+
+`designFreedom` says how freely the concept may be *generated*; `reviewStrictness`
+says how differences are *judged*. At `designFreedom: 0` the generator tries for
+maximum adherence to the reference's structure and style, but the reference only
+controls layout and styling: **your brief controls the subject and the text**, so a
+different photograph is not a failure. Under `"balanced"` review:
+
+- **Warnings** (reported, never fail the job): small position, spacing or size
+  differences; minor decorative variations; an extra subtle line or ornament; natural
+  photographic differences that keep the visual balance; localized Hebrew typography
+  adjustments.
+- **Blocking** (corrected, and fail the job if they cannot be): a material change to
+  the composition or hierarchy; imagery that interferes with text; missing or wrong
+  approved text (including the business name), wrong contact details, unsupported
+  claims or unreadable required text; broken HTML or assets, non-editable text,
+  invalid layer separation or alpha, rendering failures.
+
+Warnings come back with a successful result as `result.warnings` (and `qa.warnings`).
+Nothing that was already in the response changed.
 
 ### Response
 
@@ -261,6 +283,8 @@ is private, and a caller without bucket access gets the same content from the
 |---|---|
 | `passed` | `true` only when every technical check passed and there are zero blocking issues. |
 | `blockingIssues`, `suggestions` | What review found. A delivered design has no blocking issues. |
+| `warnings` | Non-blocking findings from the concept and final reviews (`stage`, `code`, `category`, `affected`, `impact`, `suggestion`). Reported, never a reason for failure. |
+| `conceptSelection` | Which concept candidate every stage used: `attempt`, `key`, `sha256`, `policyVersion`, `selectedBy`, `reason`. |
 | `renderChecks` | One entry per required render check, each `passed`, `failed` or `missing`. |
 | `renderKey`, `renderSha256` | Identifier and hash of the exact render that was reviewed. |
 | `htmlHash`, `assetManifestHash` | The version the review applies to. |
@@ -316,7 +340,8 @@ A failed job names the stage that failed and why:
     "stage": "DECORATION_OVERLAY",
     "code": "INVALID_TRANSPARENCY",
     "message": "The decoration overlay is effectively opaque across the canvas (0.4% transparent); it would hide the photograph.",
-    "retryable": false
+    "retryable": false,
+    "category": "asset-validation"
   }
 }
 ```
@@ -339,7 +364,9 @@ timeout is retryable; an unapproved font is not.
 | `INVALID_SCENE` | Layout geometry was out of bounds, or copy was altered. | Retryable. |
 | `INVALID_TRANSPARENCY` | The overlay came back opaque or with the photo baked in. | Repaired automatically up to twice, then terminal. |
 | `IMPOSSIBLE_CONTENT_REQUIREMENT` | The design needs more than 3 generated images. | Simplify the brief or supply the images. |
-| `REFERENCE_ADHERENCE_FAILED` | The concept still broke the `designFreedom` policy after 2 concept repair rounds. | Raise `designFreedom` deliberately, or adjust the brief or reference. The service never raises it for you. |
+| `REQUIRED_COPY_MISSING` | No concept candidate carried all of the approved text (for example the business name) after 2 concept correction rounds. Category `content`. | Check the copy; retry. The message names what is missing. |
+| `POLICY_VERSION_MISMATCH` | A stored policy or reference analysis was produced under another policy version. | Submit the request again. |
+| `REFERENCE_ADHERENCE_FAILED` | No concept candidate was free of material (blocking) structural problems after 2 concept correction rounds. Category `reference-adherence`. | Raise `designFreedom` deliberately, or adjust the brief or reference. The service never raises it for you. |
 | `REFERENCE_CONSTRAINT_CONFLICT` | Required content cannot fit the reference layout at this `designFreedom`. | Raise `designFreedom`, shorten the copy or choose another reference. |
 | `CORRECTION_EXHAUSTED` | Still had blocking defects after 2 correction rounds. | Adjust the brief. |
 | `PROVIDER_OUTCOME_UNKNOWN` | A paid generation timed out; we cannot tell whether it completed. | **Not retried automatically** — a retry is what would pay twice. |
