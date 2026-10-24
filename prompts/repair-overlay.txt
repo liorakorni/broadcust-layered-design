@@ -1,27 +1,10 @@
-This image is a graphic overlay with a transparent background. It is almost
-correct, but some elements that belong to other layers were left in it.
-
-REMOVE completely, leaving genuine transparency where they were:
+CORRECTION. An earlier extraction of this same image was checked and rejected.
+Extract the graphic overlay again from this image, following every rule above,
+and fix exactly the problems listed here without changing anything that was
+already right:
 {defects}
 
-Also remove anything else that is a word, a letter, a number or a logo.
-
-KEEP everything else EXACTLY as it is - same position, same size, same colour,
-same opacity:
-- Decorative panels, ribbons, banners, badges and framing shapes, including any
-  panel that a removed word was sitting on. Keep the panel, drop the word.
-- Button and call-to-action background shapes.
-- Pictogram icons such as a bed, car, plane, phone or envelope symbol. These are
-  intended decoration, not text, and must survive.
-- Ornamental flourishes, dividers and graphic texture.
-
-TRANSPARENCY REQUIREMENTS:
-- Everywhere that is already transparent must stay genuinely transparent, with a
-  real alpha channel. Not white. Not black. Not grey. Not a drawn checkerboard.
-- The area left behind by a removed element must become transparent, not filled.
-- Keep the graphic panels opaque where they are opaque.
-- Keep soft edges, glows and shadows partially transparent.
-- Do not add any new background, frame, border or backdrop.
-
-Do not redraw or restyle the artwork. This is a targeted removal, not a
-redesign. The result must stay aligned to the full {width}x{height} canvas.
+Fix them without creating new ones: keep every panel, badge, icon, frame and
+ornament that is in the image, fully opaque and exactly where it is, and remove
+only photographs and text. Where something must be removed, leave genuine
+transparency, not a flat colour, a rectangle or a backing shape.

@@ -54,8 +54,8 @@ Stable logical names used across stages:
 | `PREPARE_COPY` | `copy.json` | Authoritative copy manifest, keyed by content key |
 | `CONCEPT` | `concept.png` | Exact concept bytes — the immutable separation input |
 | `EXTRACT_SCENE` | `scene.json` | Validated scene document |
-| `CLEAN_PHOTO` | `photo.png` | Background photograph, no text or graphics |
-| `DECORATION_OVERLAY` | `overlay.png` | RGBA decoration layer |
+| `CLEAN_PHOTO` | `photo.png`, `photo-after-repair-N.png` | Background photograph, no text or graphics; rebuilt after each overlay repair |
+| `DECORATION_OVERLAY` | `overlay.png`, `overlay-repair-N.png` | RGBA decoration layer; each repair is a fresh extraction from the concept |
 | `INDEPENDENT_ASSETS` | `assets/<assetId>.png` | One independent asset |
 | `VALIDATE_ASSETS` | `validation.json` | Per-asset measurements and verdicts |
 | `ASSEMBLE` | `design.html` | Exact final HTML bytes |

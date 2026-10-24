@@ -113,12 +113,20 @@ def validate_overlay(data, scene, canvas):
             "rather than generated with real transparency."
         )
 
-    failures = check_sample_regions(rgba, scene, canvas)
-    if failures:
+    if not scene.get("overlaySamples"):
         raise InvalidTransparency(
             "The decoration overlay does not match the expected layout: "
-            + "; ".join(failures)
+            "the scene declared no overlay sample regions to verify"
         )
+    failures = sample_failures(rgba, scene, canvas)
+    if failures:
+        error = InvalidTransparency(
+            "The decoration overlay does not match the expected layout: "
+            + "; ".join(f["message"] for f in failures)
+        )
+        # What the repair is told: located, actionable, not region numbers.
+        error.defect = "\n".join(describe_failures(failures, canvas))
+        raise error
     return stats
 
 
@@ -129,34 +137,83 @@ def check_sample_regions(rgba, scene, canvas):
     transparency percentage cannot: the right fraction depends entirely on how
     dense the design is, so a threshold that passes a sparse layout would also
     pass an overlay with the photograph baked into it.
+
+    Returns one message per failing region. `sample_failures` returns the same
+    findings with their locations, which is what a repair needs.
     """
     samples = scene.get("overlaySamples") or []
     if not samples:
         return ["the scene declared no overlay sample regions to verify"]
+    return [f["message"] for f in sample_failures(rgba, scene, canvas)]
 
+
+def sample_failures(rgba, scene, canvas):
+    """Measure every declared sample region; return the ones that disagree.
+
+    A region "agrees" when at least REGION_AGREEMENT of its pixels are
+    transparent (alpha below TRANSPARENT_THRESHOLD) for a transparent region, or
+    opaque (alpha at or above OPAQUE_THRESHOLD) for an opaque one. The
+    denominator is every pixel of the region after the overlay has been
+    resampled to the canvas, so "74% transparent" means 74% of those pixels.
+    """
     failures = []
-    for index, sample in enumerate(samples):
+    for index, sample in enumerate(scene.get("overlaySamples") or []):
         box = _clip(sample, canvas)
         if box is None:
             continue
-        region = rgba.crop(box).getchannel("A")
-        histogram = region.histogram()
+        histogram = rgba.crop(box).getchannel("A").histogram()
         total = sum(histogram) or 1
         if sample["kind"] == "transparent":
             agree = sum(histogram[:TRANSPARENT_THRESHOLD]) / total
-            if agree < REGION_AGREEMENT:
-                failures.append(
-                    f"region {index} should show the photograph through but is "
-                    f"only {agree:.0%} transparent"
-                )
+            message = (
+                f"region {index} should show the photograph through but is "
+                f"only {agree:.0%} transparent"
+            )
         else:
             agree = sum(histogram[OPAQUE_THRESHOLD:]) / total
-            if agree < REGION_AGREEMENT:
-                failures.append(
-                    f"region {index} should be solid artwork but is only "
-                    f"{agree:.0%} opaque"
-                )
+            message = (
+                f"region {index} should be solid artwork but is only "
+                f"{agree:.0%} opaque"
+            )
+        if agree < REGION_AGREEMENT:
+            failures.append(
+                {
+                    "index": index,
+                    "kind": sample["kind"],
+                    "box": box,
+                    "agree": agree,
+                    "message": message,
+                }
+            )
     return failures
+
+
+def describe_failures(failures, canvas):
+    """Turn region failures into instructions an image model can act on.
+
+    Region numbers mean nothing to a model; where the area is and what it should
+    be does. Coordinates are canvas pixels from the top-left.
+    """
+    lines = []
+    for f in failures:
+        left, top, right, bottom = f["box"]
+        where = (
+            f"the area at x={left}, y={top} ({right - left}x{bottom - top} px "
+            f"on the {canvas['width']}x{canvas['height']} canvas)"
+        )
+        if f["kind"] == "transparent":
+            lines.append(
+                f"{where} must be fully transparent so the photograph shows "
+                f"through, but only {f['agree']:.0%} of it is. Remove whatever "
+                "fills it, including any dark or coloured backing rectangle."
+            )
+        else:
+            lines.append(
+                f"{where} belongs to a solid graphic panel and must be fully "
+                f"opaque, but only {f['agree']:.0%} of it is. Keep that panel "
+                "whole and opaque."
+            )
+    return lines
 
 
 def validate_background(data, canvas):

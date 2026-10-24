@@ -66,22 +66,35 @@ Judge ONLY whether image 2 restores the concept's artwork in the same place.
 - description: when displaced, name each element and say where it is in image 1
   versus image 2, so the overlay can be repaired. Empty string otherwise."""
 
-_COMPOSITE_PROMPT = """These three images show the SAME graphic overlay composited onto
-three different solid backgrounds: magenta, white and black.
+_COMPOSITE_PROMPT = """Image 1 is the APPROVED CONCEPT: the finished design this overlay was
+separated from. Images 2, 3 and 4 show the SAME separated graphic overlay
+composited onto three different solid backgrounds: magenta, white and black.
 
-Judge the OVERLAY artwork only, not the backgrounds.
+Judge the OVERLAY artwork only (images 2-4), not the backgrounds. Use image 1 to
+learn what is intended artwork and what is not.
 
-- photographicLeftovers: true if any part of a photographic scene survives in the
-  overlay - sky, landscape, buildings, foliage, skin, or photographic texture.
-  A flat graphic panel is not photographic.
+INTENDED ARTWORK - never report any of this, even when it looks dark, grainy or
+rough. If a panel, background surface, frame, ribbon, stripe, ornament or pattern
+is part of the graphic design in image 1, it belongs in the overlay:
+- A flat panel or full-canvas background with a grain, noise, scratch, grunge,
+  paper, concrete or stone surface texture is GRAPHIC ARTWORK, not photography.
+  A texture applied to a graphic surface is not a photographic scene.
+
+- photographicLeftovers: true ONLY if the overlay still contains part of the
+  concept's PHOTOGRAPH: real-world scene content such as sky, landscape,
+  buildings, streets, foliage, people, products, skin, or the lighting and depth
+  of a real photographed place. A flat graphic panel is not photographic, and
+  neither is the surface texture of one.
 - textLeftovers: true if any readable word, letter, number or logo remains.
   Pictogram icons - a bed, car, plane, phone or envelope symbol - are intended
   decoration and are not text.
 - artworkPresent: true if real decorative artwork is present - panels, ribbons,
   badges, frames or ornaments.
-- leftoverDescription: when anything above is a problem, name each offending
-  element and where it sits, for example "a logo mark of cypress trees and a
-  house in the top-right corner". Empty string when there is nothing to remove.
+- leftoverDescription: when photographicLeftovers or textLeftovers is true, name
+  each offending element and where it sits, for example "a logo mark of cypress
+  trees and a house in the top-right corner". Never list a graphic panel,
+  background surface or ornament that is present in image 1 as an offending
+  element. Empty string when there is nothing to remove.
 
 If the artwork looks identical against all three backgrounds, the transparency is
 genuine. If it sits on a visible rectangle that changes with the background, it is
@@ -104,15 +117,19 @@ def run(job_id, attempt, asset_id=None):
 
     try:
         stats = validate_assets.validate_overlay(overlay, scene, canvas)
-        inspect_composites(overlay, canvas, job_id, attempt)
+        concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
+        inspect_composites(overlay, concept, canvas, job_id, attempt)
         # Regeneration can change alignment. Re-stacking the separated layers and
         # comparing with the approved concept catches material displacement, which
         # is repaired at the asset rather than excused by editing the scene.
-        concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
         inspect_fidelity(background, overlay, concept, job_id, attempt)
     except InvalidTransparency as exc:
+        # Every rejection records what is wrong, not only the vision ones: a
+        # repair that was told the previous round's finding would be repairing
+        # the wrong thing.
+        jobs.record_overlay_defect(job_id, getattr(exc, "defect", None) or exc.message)
         # Raises OverlayRepairNeeded when a repair is still available, which the
-        # workflow routes back to a targeted overlay edit. Otherwise the original
+        # workflow routes back to a regenerated overlay. Otherwise the original
         # terminal error propagates.
         _request_repair_or_fail(job_id, exc)
         raise
@@ -130,16 +147,24 @@ def run(job_id, attempt, asset_id=None):
     return result
 
 
-def inspect_composites(overlay_bytes, canvas, job_id, attempt):
+def inspect_composites(overlay_bytes, concept_bytes, canvas, job_id, attempt):
     """Ask vision to inspect the overlay over three contrasting backgrounds.
 
     Three colours rather than one: artwork that looks correct on white may be
     invisible on white because it IS white, and a baked-in rectangle only becomes
     obvious when the background behind it changes.
+
+    The approved concept is sent first. Without it the model cannot tell a
+    textured graphic panel that the design intends (a grainy black background,
+    say) from a photograph, and it rejected exactly such a panel - after which the
+    repair removed the panel. The concept is what defines "intended artwork".
     """
     composites = [
-        composite_on(overlay_bytes, colour)
-        for colour in ((255, 0, 255), (255, 255, 255), (0, 0, 0))
+        _thumbnail_png(concept_bytes),
+        *(
+            composite_on(overlay_bytes, colour)
+            for colour in ((255, 0, 255), (255, 255, 255), (0, 0, 0))
+        ),
     ]
     verdict = vision.analyze(
         _COMPOSITE_PROMPT,
@@ -158,12 +183,13 @@ def inspect_composites(overlay_bytes, canvas, job_id, attempt):
     if not verdict["artworkPresent"]:
         problems.append("no decorative artwork was found in the decoration layer")
     if problems:
-        # Persisted before raising so the repair can act on what the inspection
-        # actually saw, rather than re-deriving it from the error message.
-        jobs.record_overlay_defect(job_id, verdict["leftoverDescription"])
-        raise InvalidTransparency(
+        # Carried on the error so `run` persists what the inspection actually saw
+        # for the repair, rather than the repair re-deriving it from a message.
+        error = InvalidTransparency(
             "The decoration layer was not cleanly separated: " + "; ".join(problems)
         )
+        error.defect = verdict["leftoverDescription"] or "; ".join(problems)
+        raise error
     return verdict
 
 
@@ -192,12 +218,25 @@ def inspect_fidelity(background_bytes, overlay_bytes, concept_bytes, job_id, att
         operation_id=f"{job_id}:validate_assets_fidelity:{attempt}",
     )
     if verdict["displaced"]:
-        jobs.record_overlay_defect(job_id, verdict["description"])
-        raise InvalidTransparency(
+        error = InvalidTransparency(
             "The separated layers do not reconstruct the approved concept: "
             + (verdict["description"] or "material displacement")
         )
+        error.defect = verdict["description"] or "material displacement"
+        raise error
     return verdict
+
+
+def _thumbnail_png(image_bytes):
+    """Downscale an RGB image to the same bounds used for the composites."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        rgb = img.convert("RGB")
+    rgb.thumbnail((768, 768), Image.LANCZOS)
+    buf = io.BytesIO()
+    rgb.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def composite_on(overlay_bytes, colour):

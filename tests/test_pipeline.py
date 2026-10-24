@@ -249,10 +249,10 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(reference, "fetch", fake_fetch)
 
     def fake_edit(prompt, source, w, h, *, transparent=False, operation_id=None,
-                  quality="high", mime="image/png"):
+                  quality="high", mime="image/png", mask=None):
         calls["image"].append(
             {"op": "edit", "transparent": transparent, "source": source,
-             "operationId": operation_id}
+             "operationId": operation_id, "mask": mask, "prompt": prompt}
         )
         data = fake_overlay() if transparent else fake_photo()
         return {"bytes": data, "mimeType": "image/png", "requestId": "req_x",
@@ -334,8 +334,8 @@ def run_pipeline(pipeline):
         Stage.CONCEPT,
         Stage.REVIEW_CONCEPT,
         Stage.EXTRACT_SCENE,
-        Stage.CLEAN_PHOTO,
         Stage.DECORATION_OVERLAY,
+        Stage.CLEAN_PHOTO,
         Stage.VALIDATE_ASSETS,
         Stage.ASSEMBLE,
         Stage.RENDER,
@@ -416,15 +416,27 @@ def test_no_price_is_invented(pipeline):
 # --- the invariants, observed on a real run --------------------------------
 
 
-def test_both_separation_branches_edit_the_identical_concept_bytes(pipeline):
+def test_both_separation_stages_edit_the_identical_concept_bytes(pipeline):
     """Invariant 3. If the overlay were derived from the cleaned photo it would
-    be empty, and no later stage would notice."""
+    be empty, and no later stage would notice. The overlay now runs first, so
+    what must hold is that neither stage is ever handed the other's pixels."""
     run_pipeline(pipeline)
     edits = [c for c in pipeline["calls"]["image"] if c["op"] == "edit"]
     separation = edits[1:3]
     assert len(separation) == 2
     assert separation[0]["source"] == separation[1]["source"]
-    assert {c["transparent"] for c in separation} == {False, True}
+    # Overlay first (transparent), then the masked photo (opaque).
+    assert [c["transparent"] for c in separation] == [True, False]
+
+
+def test_the_photo_is_repainted_under_a_mask_and_the_overlay_is_not(pipeline):
+    """Without a mask the model re-composes the frame and the photograph comes
+    back zoomed and shifted relative to the concept."""
+    run_pipeline(pipeline)
+    edits = [c for c in pipeline["calls"]["image"] if c["op"] == "edit"]
+    overlay, photo = edits[1], edits[2]
+    assert overlay["mask"] is None
+    assert photo["mask"] and photo["mask"].startswith(b"\x89PNG")
 
 
 def test_scene_extraction_requests_original_detail(pipeline):
@@ -441,12 +453,13 @@ def test_review_sees_concept_native_and_feed(pipeline):
 
 
 def test_overlay_is_inspected_on_three_contrasting_backgrounds(pipeline):
+    """Image 1 is the approved concept; images 2-4 are the three composites."""
     run_pipeline(pipeline)
     inspect = [
         c for c in pipeline["calls"]["vision"]
         if c["schema"] == "overlay_inspection_v1"
     ]
-    assert inspect and inspect[0]["images"] == 3
+    assert inspect and inspect[0]["images"] == 4
 
 
 def test_preflight_performs_no_paid_image_generation(pipeline):
@@ -500,8 +513,8 @@ def _stages_up_to_review(pipeline):
         Stage.CONCEPT,
         Stage.REVIEW_CONCEPT,
         Stage.EXTRACT_SCENE,
-        Stage.CLEAN_PHOTO,
         Stage.DECORATION_OVERLAY,
+        Stage.CLEAN_PHOTO,
         Stage.VALIDATE_ASSETS,
         Stage.ASSEMBLE,
         Stage.RENDER,

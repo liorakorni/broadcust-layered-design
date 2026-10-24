@@ -43,8 +43,8 @@ def through(pipeline, last):
         Stage.CONCEPT,
         Stage.REVIEW_CONCEPT,
         Stage.EXTRACT_SCENE,
-        Stage.CLEAN_PHOTO,
         Stage.DECORATION_OVERLAY,
+        Stage.CLEAN_PHOTO,
         Stage.VALIDATE_ASSETS,
         Stage.ASSEMBLE,
         Stage.RENDER,
@@ -95,8 +95,8 @@ def test_opaque_overlay_is_rejected_at_validation(pipeline, monkeypatch):
                 "model": conf.IMAGE_MODEL}
 
     monkeypatch.setattr(image_provider, "edit", flat)
-    run_stage(pipeline["jobId"], Stage.CLEAN_PHOTO)
     run_stage(pipeline["jobId"], Stage.DECORATION_OVERLAY)
+    run_stage(pipeline["jobId"], Stage.CLEAN_PHOTO)
 
     with pytest.raises(InvalidTransparency, match="effectively opaque"):
         run_stage(pipeline["jobId"], Stage.VALIDATE_ASSETS)
@@ -119,8 +119,8 @@ def test_overlay_repair_is_bounded_per_job(pipeline, monkeypatch):
                 "model": conf.IMAGE_MODEL}
 
     monkeypatch.setattr(image_provider, "edit", flat)
-    run_stage(pipeline["jobId"], Stage.CLEAN_PHOTO)
     run_stage(pipeline["jobId"], Stage.DECORATION_OVERLAY)
+    run_stage(pipeline["jobId"], Stage.CLEAN_PHOTO)
 
     seen = []
     for _ in range(conf.MAX_OVERLAY_REPAIRS + 1):
@@ -134,7 +134,7 @@ def test_overlay_repair_is_bounded_per_job(pipeline, monkeypatch):
 
 def test_photograph_surviving_in_the_overlay_is_caught_by_vision(pipeline, monkeypatch):
     """Alpha statistics cannot see this; only the composite inspection can."""
-    through(pipeline, Stage.DECORATION_OVERLAY)
+    through(pipeline, Stage.CLEAN_PHOTO)
 
     real = vision_provider.analyze
 
@@ -172,8 +172,8 @@ def test_background_with_unreconstructed_gaps_is_rejected(pipeline, monkeypatch)
                 "model": conf.IMAGE_MODEL}
 
     monkeypatch.setattr(image_provider, "edit", holed)
-    run_stage(pipeline["jobId"], Stage.CLEAN_PHOTO)
     run_stage(pipeline["jobId"], Stage.DECORATION_OVERLAY)
+    run_stage(pipeline["jobId"], Stage.CLEAN_PHOTO)
 
     with pytest.raises(AssetInvalid, match="not reconstructed"):
         run_stage(pipeline["jobId"], Stage.VALIDATE_ASSETS)
@@ -429,7 +429,7 @@ def test_a_rejected_overlay_is_repaired_and_then_passes(pipeline, monkeypatch):
     retryable, but nothing ever regenerated the overlay, so every job with a
     leftover died at VALIDATE_ASSETS.
     """
-    through(pipeline, Stage.DECORATION_OVERLAY)
+    through(pipeline, Stage.CLEAN_PHOTO)
     job_id = pipeline["jobId"]
 
     real = vision_provider.analyze
@@ -488,7 +488,7 @@ def test_a_repairable_overlay_raises_the_class_the_workflow_routes_on(
     """Step Functions can branch on an exception class but not on a field."""
     from lib.errors import OverlayRepairNeeded
 
-    through(pipeline, Stage.DECORATION_OVERLAY)
+    through(pipeline, Stage.CLEAN_PHOTO)
 
     real = vision_provider.analyze
 
@@ -509,7 +509,7 @@ def test_an_exhausted_overlay_repair_is_terminal_not_repairable(
 ):
     from lib.errors import OverlayRepairNeeded
 
-    through(pipeline, Stage.DECORATION_OVERLAY)
+    through(pipeline, Stage.CLEAN_PHOTO)
     job_id = pipeline["jobId"]
 
     real = vision_provider.analyze

@@ -250,66 +250,28 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "SeparateLayers"
+      "Next": "DecorationOverlay"
     },
-    "SeparateLayers": {
-      "Type": "Parallel",
-      "Comment": "Both branches edit the SAME immutable concept bytes. They are never chained: the overlay must not be derived from the cleaned photo.",
-      "ResultPath": "$.separation",
-      "Branches": [
+    "DecorationOverlay": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "DECORATION_OVERLAY",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "Retry": [
         {
-          "StartAt": "CleanPhoto",
-          "States": {
-            "CleanPhoto": {
-              "Type": "Task",
-              "Resource": "${StageFunctionArn}",
-              "Parameters": {
-                "jobId.$": "$.jobId",
-                "stage": "CLEAN_PHOTO",
-                "attempt.$": "$.attempt",
-                "assetId": null
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "ProviderRateLimited"
-                  ],
-                  "IntervalSeconds": 20,
-                  "MaxAttempts": 2,
-                  "BackoffRate": 2
-                }
-              ],
-              "End": true
-            }
-          }
-        },
-        {
-          "StartAt": "DecorationOverlay",
-          "States": {
-            "DecorationOverlay": {
-              "Type": "Task",
-              "Resource": "${StageFunctionArn}",
-              "Parameters": {
-                "jobId.$": "$.jobId",
-                "stage": "DECORATION_OVERLAY",
-                "attempt.$": "$.attempt",
-                "assetId": null
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "ProviderRateLimited"
-                  ],
-                  "IntervalSeconds": 20,
-                  "MaxAttempts": 2,
-                  "BackoffRate": 2
-                }
-              ],
-              "End": true
-            }
-          }
+          "ErrorEquals": [
+            "ProviderRateLimited"
+          ],
+          "IntervalSeconds": 20,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
         }
       ],
+      "ResultPath": "$.decoration",
       "Catch": [
         {
           "ErrorEquals": [
@@ -319,7 +281,40 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "IndependentAssets"
+      "Next": "CleanPhoto",
+      "Comment": "Runs before CleanPhoto: the photo is repainted only where this overlay (and the scene's text boxes) cover it, so the visible photograph keeps its exact framing."
+    },
+    "CleanPhoto": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "CLEAN_PHOTO",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderRateLimited"
+          ],
+          "IntervalSeconds": 20,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.photo",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "IndependentAssets",
+      "Comment": "Edits the immutable concept under a mask. Never fed the overlay's pixels - only the shape of its alpha."
     },
     "IndependentAssets": {
       "Type": "Map",
@@ -404,6 +399,39 @@
         "operation": "REPAIR_OVERLAY"
       },
       "ResultPath": "$.overlayRepair",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "RebuildPhoto"
+    },
+    "RebuildPhoto": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "After an overlay repair the photo is repainted around the repaired overlay, so the two layers stay consistent.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "CLEAN_PHOTO",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "REBUILD_PHOTO"
+      },
+      "ResultPath": "$.photoRebuild",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderRateLimited"
+          ],
+          "IntervalSeconds": 20,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
       "Catch": [
         {
           "ErrorEquals": [

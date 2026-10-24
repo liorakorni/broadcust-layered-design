@@ -326,7 +326,7 @@ Persist status, current stage, timestamps, request hash, owner scope, execution 
 
 Implement the following sequence:
 
-PREFLIGHT -> PREPARE_COPY -> ANALYZE_REFERENCE -> CONCEPT -> REVIEW_CONCEPT -> EXTRACT_SCENE -> CLEAN_PHOTO -> DECORATION_OVERLAY -> INDEPENDENT_ASSETS -> VALIDATE_ASSETS -> ASSEMBLE -> RENDER -> REVIEW -> FINALIZE.
+PREFLIGHT -> PREPARE_COPY -> ANALYZE_REFERENCE -> CONCEPT -> REVIEW_CONCEPT -> EXTRACT_SCENE -> DECORATION_OVERLAY -> CLEAN_PHOTO -> INDEPENDENT_ASSETS -> VALIDATE_ASSETS -> ASSEMBLE -> RENDER -> REVIEW -> FINALIZE.
 
 In production, dispatch the stage Lambda using `{jobId, stage, attempt}`; independent asset tasks also receive assetId. A bounded Map may process at most three independent generated assets, with concurrency at most two.
 
@@ -364,11 +364,13 @@ Validate finite values, positive sizes, bounds, unique IDs/content keys, approve
 
 ### CLEAN_PHOTO
 
-Edit the immutable original concept, removing all words, logos, graphic panels/ribbons, separately planned foreground ornaments, independent photos and independent subjects. Reconstruct a complete photographic scene behind removed items. Do not leave blank panel-shaped gaps. Preserve photographic lighting, relevant scenery and ordinary scene participants when not planned as independent assets.
+Runs after DECORATION_OVERLAY. Edit the immutable original concept under a mask: repaint only what is not the photograph - every pixel the overlay draws (grown slightly for soft edges), every text box and every independent inset - and keep the visible photograph pixel for pixel. The mask uses only the SHAPE of the overlay's alpha; the overlay's pixels are never an input image, and the cleaned photograph is never fed back into the overlay. Reconstruct the scene behind removed items at the same scale and perspective. Do not leave blank panel-shaped gaps. Preserve photographic lighting, relevant scenery and ordinary scene participants when not planned as independent assets.
+
+Rationale, measured on a real concept: an unmasked edit re-composes the whole frame, and in 4 of 4 runs (plus 6 of 6 with stricter prompts) the photograph came back zoomed 1.09-1.25x and shifted 90-270 px, so the stacked layers no longer reproduced the concept. Under a mask the scale was 1.00 and the shift 0.1 px. After an overlay repair the photo is rebuilt around the repaired overlay (written as `photo-after-repair-N.png`).
 
 ### DECORATION_OVERLAY
 
-Edit the SAME immutable concept, not the already cleaned photograph. Retain only graphic artwork and text-support panels, aligned to the full canvas. Remove photographic scene/sky/buildings, all words/logos and independent imagery. Require genuine RGBA transparency in the photo windows, opaque panels where intended and partially transparent soft edges. No white/black rectangles or baked checkerboards. Do not bake a CTA background here when that background is implemented as CSS on its text layer.
+Runs first. Edit the SAME immutable concept, not the already cleaned photograph. Retain only graphic artwork and text-support panels, aligned to the full canvas. Icon badges (a circle or shape holding a phone, envelope, pin or similar pictogram) are artwork: keep the shape and the pictogram and remove only adjacent words. A solid, dark or textured background surface that is not photographic is a graphic panel and stays whole and opaque. Remove photographic scene/sky/buildings, all words/logos and independent imagery. Require genuine RGBA transparency in the photo windows, opaque panels where intended and partially transparent soft edges. No white/black rectangles or baked checkerboards. Do not bake a CTA background here when that background is implemented as CSS on its text layer.
 
 ### INDEPENDENT_ASSETS
 
@@ -378,7 +380,7 @@ Extract/create up to three independent generated photo/subject/product assets wh
 
 Decode bytes with sharp: validate format, orientation, dimensions, aspect and alpha. Normalize full-canvas photo and overlay consistently to the target canvas. Overlay sample regions derived from the scene must confirm transparent photo windows and visible graphic areas. Reject fully empty/opaque overlays. Do not use a universal transparency percentage threshold for every composition.
 
-Inspect contrasting-background composites with vision for checkerboard patterns, photographic leakage, leftover text and missing artwork. Alpha statistics alone are insufficient. Regeneration can change alignment. Local geometry/crop adjustments are allowed only when they preserve the approved concept. Material panel, silhouette or subject displacement requires targeted asset repair and revalidation; do not redefine the target scene to excuse extraction drift.
+Inspect contrasting-background composites with vision for checkerboard patterns, photographic leakage, leftover text and missing artwork. The approved concept is sent with the composites, because only it defines what is intended artwork: a grainy or scratched graphic panel is decoration, not a photographic leftover. Alpha statistics alone are insufficient. Regeneration can change alignment. Local geometry/crop adjustments are allowed only when they preserve the approved concept. Material panel, silhouette or subject displacement requires targeted asset repair and revalidation; do not redefine the target scene to excuse extraction drift.
 
 ### ASSEMBLE
 
@@ -396,7 +398,7 @@ Require strict JSON: `{passed, blockingIssues:[{code,layerId,assetId,message}], 
 
 ### CORRECTION AND FINALIZE
 
-Allow at most two correction rounds after initial render. Use validated scene patches for placement/typography and targeted asset edits for raster defects. Every changed asset or HTML version requires downstream validation, reassembly, rendering and review. Bound targeted overlay repairs to two per job, not two per task retry.
+Allow at most two correction rounds after initial render. Use validated scene patches for placement/typography and targeted asset edits for raster defects. Every changed asset or HTML version requires downstream validation, reassembly, rendering and review. Bound targeted overlay repairs to two per job, not two per task retry. An overlay repair regenerates the overlay from the approved concept with the located failure appended to the full extraction prompt (region failures are reported as where and what, not as region numbers); it never edits the rejected overlay, which can only remove content and in practice inverted its alpha (0 of 6 passed, against 6 of 6 for regeneration).
 
 Hash exact final HTML bytes and a canonical ordered asset manifest containing asset IDs, immutable keys/versions and byte hashes. Store QA with matching concept/render identities, hashes, model identities, attempt, effective designFreedom, policyVersion, reference-policy review and documented deviations. Mark SUCCEEDED only after all final artifacts are durable and final QA matches. Otherwise persist a terminal stage/code/message error.
 

@@ -91,23 +91,33 @@ def test_independent_assets_is_a_bounded_map():
     assert m["MaxConcurrency"] == 2
 
 
-def test_clean_photo_and_overlay_run_in_parallel_not_chained():
-    """Invariant 3: the overlay must edit the concept, never the cleaned photo.
+def test_overlay_runs_before_the_photo_which_is_repainted_around_it():
+    """CLEAN_PHOTO is masked by the overlay's shape, so the overlay comes first.
 
-    Running them as sibling Parallel branches makes chaining structurally
-    impossible rather than merely discouraged.
+    The photo previously ran in parallel and came back zoomed and shifted against
+    the concept; with the visible photograph locked by a mask it does not.
     """
-    sep = STATES["SeparateLayers"]
-    assert sep["Type"] == "Parallel"
-    stages = [
-        list(b["States"].values())[0]["Parameters"]["stage"] for b in sep["Branches"]
-    ]
-    assert sorted(stages) == ["CLEAN_PHOTO", "DECORATION_OVERLAY"]
+    assert "SeparateLayers" not in STATES
+    assert STATES["ExtractScene"]["Next"] == "DecorationOverlay"
+    assert STATES["DecorationOverlay"]["Parameters"]["stage"] == "DECORATION_OVERLAY"
+    assert STATES["DecorationOverlay"]["Next"] == "CleanPhoto"
+    assert STATES["CleanPhoto"]["Parameters"]["stage"] == "CLEAN_PHOTO"
+    assert STATES["CleanPhoto"]["Next"] == "IndependentAssets"
+
+
+def test_a_repaired_overlay_gets_a_photo_repainted_around_it():
+    """The photo's mask is the overlay's shape, so a repaired overlay needs a
+    rebuilt photo before the layers are validated together."""
+    assert STATES["RepairOverlay"]["Next"] == "RebuildPhoto"
+    rebuild = STATES["RebuildPhoto"]
+    assert rebuild["Parameters"]["operation"] == "REBUILD_PHOTO"
+    assert rebuild["Parameters"]["stage"] == "CLEAN_PHOTO"
+    assert rebuild["Next"] == "ValidateAssets"
 
 
 def test_paid_image_stages_do_not_retry_on_unknown_outcome():
     """A retry after an unknown provider outcome is what pays twice."""
-    for name in ("Concept", "SeparateLayers"):
+    for name in ("Concept", "DecorationOverlay", "CleanPhoto", "RebuildPhoto"):
         state = STATES[name]
         retries = state.get("Retry", [])
         for _, inner in _walk({name: state}):
@@ -140,13 +150,12 @@ def test_correction_advances_the_attempt_counter():
 
 
 def test_stages_rerun_by_the_correction_loop_use_the_live_attempt():
-    rerun = ("Concept", "ReviewConcept", "ExtractScene", "IndependentAssets", "ValidateAssets", "Assemble",
-             "Render", "Review", "Finalize")
+    rerun = ("Concept", "ReviewConcept", "ExtractScene", "DecorationOverlay",
+             "CleanPhoto", "RebuildPhoto", "IndependentAssets", "ValidateAssets",
+             "Assemble", "Render", "Review", "Finalize")
     for name in rerun:
         params = STATES[name]["Parameters"]
         assert params.get("attempt.$") == "$.attempt", name
-    for _, state in _walk(STATES["SeparateLayers"]["Branches"][0]["States"]):
-        assert state["Parameters"]["attempt.$"] == "$.attempt"
 
 
 def test_stages_before_the_loop_stay_on_attempt_one():
@@ -406,8 +415,11 @@ def test_a_repairable_overlay_routes_to_the_repair_rather_than_failing():
 
 
 def test_the_repair_returns_to_validation():
-    """A repair nobody re-checks is just a second way to ship a broken overlay."""
-    assert STATES["RepairOverlay"]["Next"] == "ValidateAssets"
+    """A repair nobody re-checks is just a second way to ship a broken overlay.
+
+    The photo is rebuilt around the repaired overlay on the way back."""
+    assert STATES["RepairOverlay"]["Next"] == "RebuildPhoto"
+    assert STATES["RebuildPhoto"]["Next"] == "ValidateAssets"
     assert STATES["RepairOverlay"]["Parameters"]["operation"] == "REPAIR_OVERLAY"
 
 

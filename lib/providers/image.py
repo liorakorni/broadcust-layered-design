@@ -81,8 +81,14 @@ def generate(prompt, width, height, *, transparent=False, operation_id=None,
 
 
 def edit(prompt, source_bytes, width, height, *, transparent=False,
-         operation_id=None, quality="high", mime="image/png"):
-    """Edit real source bytes. Returns `{bytes, mimeType, size, requestId}`."""
+         operation_id=None, quality="high", mime="image/png", mask=None):
+    """Edit real source bytes. Returns `{bytes, mimeType, size, requestId}`.
+
+    `mask` is PNG bytes the same size as the source. Where its alpha is 0 the
+    model repaints; everywhere else it keeps the source pixels. Without one the
+    model re-composes the whole frame, which is how CLEAN_PHOTO came back zoomed
+    and shifted relative to the concept it was cleaning.
+    """
     extension = "png" if mime == "image/png" else "jpg"
     params = {
         "model": conf.IMAGE_MODEL,
@@ -93,6 +99,8 @@ def edit(prompt, source_bytes, width, height, *, transparent=False,
         "output_format": "png",
         "background": "transparent" if transparent else "opaque",
     }
+    if mask is not None:
+        params["mask"] = ("mask.png", mask, "image/png")
     return _call(lambda c: c.images.edit(**params), operation_id, transparent)
 
 

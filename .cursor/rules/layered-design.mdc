@@ -31,7 +31,12 @@ If the API rejects one, report it — never substitute a model from memory.
    credentials beyond `brief`. Padding a layout with invented services is a correctness
    bug, not a style choice.
 3. **CLEAN_PHOTO and DECORATION_OVERLAY both edit the same immutable concept bytes.**
-   Never feed the cleaned photo into the overlay stage.
+   Never feed the cleaned photo into the overlay stage, and never feed the overlay's
+   pixels into the photo stage. The overlay runs first because CLEAN_PHOTO is repainted
+   under a mask built from the overlay's alpha *shape* (and the scene's text boxes);
+   the mask keeps the visible photograph's framing, which an unmasked edit does not.
+   An overlay repair regenerates from the concept with the located failure appended;
+   it never edits the rejected overlay (editing a transparent PNG inverted its alpha).
 4. **All geometry is pixels from the canvas top-left.** `fontSize` is px; `lineHeight`
    is a dimensionless multiplier. Never mix normalized 0-1 coordinates with pixels. Any
    vision call that returns coordinates passes `detail="original"`; anything else

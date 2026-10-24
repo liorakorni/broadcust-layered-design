@@ -80,6 +80,17 @@ def handler(event, context):
         _log(job_id, Stage.DECORATION_OVERLAY, attempt, started)
         return {"ok": True, "stage": Stage.DECORATION_OVERLAY, "artifacts": artifacts}
 
+    # The photo is rebuilt after an overlay repair because its mask is the
+    # overlay's shape: a repaired overlay needs a photo repainted around it.
+    if event.get("operation") == "REBUILD_PHOTO":
+        from lib.stages import separation
+
+        artifacts = separation.clean_photo(
+            job_id=job_id, attempt=attempt, after_repair=True
+        )
+        _log(job_id, Stage.CLEAN_PHOTO, attempt, started)
+        return {"ok": True, "stage": Stage.CLEAN_PHOTO, "artifacts": artifacts}
+
     if event.get("operation") == "CORRECT":
         from lib.stages import review
 

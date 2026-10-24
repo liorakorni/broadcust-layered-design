@@ -503,8 +503,8 @@ def test_separation_edits_the_frozen_concept_not_the_latest(pipeline):
     run_stage(job_id, Stage.CONCEPT, attempt=2)
     assert job_of(pipeline)["artifacts"][Stage.CONCEPT]["concept"] != frozen
     run_stage(job_id, Stage.EXTRACT_SCENE)
-    run_stage(job_id, Stage.CLEAN_PHOTO)
     run_stage(job_id, Stage.DECORATION_OVERLAY)
+    run_stage(job_id, Stage.CLEAN_PHOTO)
     sources = [c["source"] for c in pipeline["calls"]["image"]
                if c["operationId"] and ":concept:" not in c["operationId"]]
     assert sources and all(
@@ -628,7 +628,7 @@ def _run_through_review(pipeline):
     job_id = pipeline["jobId"]
     for stage in (Stage.PREFLIGHT, Stage.PREPARE_COPY, Stage.ANALYZE_REFERENCE,
                   Stage.CONCEPT, Stage.REVIEW_CONCEPT, Stage.EXTRACT_SCENE,
-                  Stage.CLEAN_PHOTO, Stage.DECORATION_OVERLAY,
+                  Stage.DECORATION_OVERLAY, Stage.CLEAN_PHOTO,
                   Stage.VALIDATE_ASSETS, Stage.ASSEMBLE, Stage.RENDER):
         run_stage(job_id, stage)
     return run_stage(job_id, Stage.REVIEW)
@@ -678,7 +678,7 @@ def test_displaced_layers_route_to_overlay_repair_not_scene_edits(
     job_id = pipeline["jobId"]
     for stage in (Stage.PREFLIGHT, Stage.PREPARE_COPY, Stage.ANALYZE_REFERENCE,
                   Stage.CONCEPT, Stage.REVIEW_CONCEPT, Stage.EXTRACT_SCENE,
-                  Stage.CLEAN_PHOTO, Stage.DECORATION_OVERLAY):
+                  Stage.DECORATION_OVERLAY, Stage.CLEAN_PHOTO):
         run_stage(job_id, stage)
     with pytest.raises(OverlayRepairNeeded):
         run_stage(job_id, Stage.VALIDATE_ASSETS)

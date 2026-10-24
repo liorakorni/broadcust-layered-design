@@ -5,6 +5,15 @@ KEEP, in their exact original positions and at their exact original size:
 - Decorative panels, ribbons, banners, badges and framing shapes.
 - Button and call-to-action background shapes.
 - Ornamental flourishes, dividers, icons and graphic texture that supports text.
+- Icon badges: a coloured or white circle, square or pill holding a pictogram
+  (a phone, envelope, pin, globe, clock, arrow). Keep BOTH the shape and its
+  pictogram, fully opaque, even when words sit beside them. Remove only the
+  words, never the badge.
+
+- Solid, dark or textured background surfaces that are NOT photographic: a black,
+  coloured, grainy, scratched or patterned panel behind the text is a graphic
+  panel, not the photograph. Keep it whole and fully opaque, edge to edge,
+  including its surface texture.
 
 REMOVE completely:
 - The entire photographic scene: sky, landscape, buildings, people, foliage,
