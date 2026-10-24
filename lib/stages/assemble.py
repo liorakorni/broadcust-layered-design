@@ -21,7 +21,7 @@ def assemble(job_id, attempt, asset_id=None):
     jobs.set_stage(job_id, Stage.ASSEMBLE)
 
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
-    scene = artifacts.get_json(job_id, job["artifacts"][Stage.EXTRACT_SCENE]["scene"])
+    scene = artifacts.get_json(job_id, scene_key_for(job, attempt))
 
     published = _publish_assets(job_id, job, attempt)
     html = assemble_html.assemble(scene, published["urls"], canvas)
@@ -49,8 +49,53 @@ def assemble(job_id, attempt, asset_id=None):
         # returned through workflow state, which carries pointers alone.
         "assets": published["manifest"],
     }
+    # The immutable snapshot of this candidate: its words, layout and assets as
+    # versioned parts, and the validation each asset check was bound to. A repair
+    # derives its next candidate from this, never by rewriting it.
+    snapshot = _snapshot(job_id, job, attempt, scene, published["manifest"], stored)
+    record["snapshot"] = snapshot
+    record["assetsReused"] = published["reused"]
     jobs.record_artifacts(job_id, Stage.ASSEMBLE, attempt, record)
     return record
+
+
+def scene_key_for(job, attempt):
+    """The scene this attempt assembles.
+
+    The first pass builds from the scene the pipeline produced. After a text or
+    layout repair it builds from the patched scene that repair wrote for exactly
+    this attempt - never from a stale one, and never by re-extracting.
+    """
+    working = job.get("workingScene") or {}
+    if working.get("key") and int(working.get("forAttempt", 0)) == int(attempt):
+        return working["key"]
+    produced = job["artifacts"]
+    if job.get("flow") == "layout-first":
+        return produced[Stage.PLAN_LAYOUT]["scene"]
+    return produced[Stage.EXTRACT_SCENE]["scene"]
+
+
+def _snapshot(job_id, job, attempt, scene, manifest, html_stored):
+    from lib import design_state
+
+    pointer = design_state.current_pointer(job)
+    parent = design_state.load(job_id, pointer["key"]) if pointer else None
+    version = int(job.get("designVersion", 0) or 0) + 1
+    validation = (job["artifacts"].get(Stage.VALIDATE_ASSETS) or {}).get("entries") or {}
+    snapshot = design_state.build_snapshot(
+        job_id,
+        version=version,
+        parent=parent,
+        scene=scene,
+        assets=manifest,
+        validation=validation,
+        reason="assembled",
+        attempt=attempt,
+        html={"key": html_stored["key"], "sha256": html_stored["sha256"]},
+    )
+    key = design_state.store(job_id, snapshot)
+    design_state.commit(job_id, snapshot, key)
+    return {"version": version, "key": key}
 
 
 def _fit_text(scene, html, canvas):
@@ -73,6 +118,11 @@ def _fit_text(scene, html, canvas):
     changes = {}
 
     for layer in adjusted["textLayers"]:
+        # A layer that asked to keep its size ("visible") is never shrunk: its
+        # overflow is reported by RENDER and routed as a typography or layout
+        # correction rather than silently absorbed here.
+        if layer.get("overflow", "shrink") == "visible":
+            continue
         change = measured.get(element_ids.get(layer["id"]))
         if not change:
             continue
@@ -83,32 +133,48 @@ def _fit_text(scene, html, canvas):
 
 
 def _publish_assets(job_id, job, attempt):
-    """Upload every delivered asset to stable media and collect its URL."""
+    """Upload every delivered asset to stable media and collect its URL.
+
+    An asset whose bytes are unchanged since an earlier assemble of this job keeps
+    the URL it was already published under: re-uploading identical bytes is slow,
+    changes nothing, and would make a text-only repair look like it touched the
+    assets. Reuse is decided by content hash, never by name.
+    """
     entries = []
     urls = {}
+    reused = []
+    previous = {
+        e["assetId"]: e
+        for e in (job.get("artifacts", {}).get(Stage.ASSEMBLE, {}) or {}).get("assets", [])
+    }
 
     for asset_id, key in _asset_keys(job).items():
         data = artifacts.get_bytes(job_id, key)
-        delivered = media.publish(data, job_id=job_id, asset_id=asset_id)
-        urls[asset_id] = delivered["url"]
-        entries.append(
-            {
-                "assetId": asset_id,
-                "key": key,
-                "sha256": artifacts.sha256_hex(data),
-                "url": delivered["url"],
-            }
-        )
-    return {"urls": urls, "manifest": entries}
+        sha = artifacts.sha256_hex(data)
+        before = previous.get(asset_id)
+        if before and before.get("sha256") == sha and before.get("url"):
+            url = before["url"]
+            reused.append(asset_id)
+            jobs.add_metric(job_id, "assetUrlsReused")
+        else:
+            url = media.publish(data, job_id=job_id, asset_id=asset_id)["url"]
+        urls[asset_id] = url
+        entries.append({"assetId": asset_id, "key": key, "sha256": sha, "url": url})
+    return {"urls": urls, "manifest": entries, "reused": reused}
 
 
 def _asset_keys(job):
     """Map each asset reference to the artifact key holding its bytes."""
     produced = job.get("artifacts", {})
-    keys = {
-        "background": produced[Stage.CLEAN_PHOTO]["background"],
-        "decoration": produced[Stage.DECORATION_OVERLAY]["decoration"],
-    }
+    if job.get("flow") == "layout-first":
+        # No overlay: simple elements are code-owned shapes in the layout, so the
+        # only generated asset is the text-free photograph.
+        keys = {"background": produced[Stage.GENERATE_PHOTO]["background"]}
+    else:
+        keys = {
+            "background": produced[Stage.CLEAN_PHOTO]["background"],
+            "decoration": produced[Stage.DECORATION_OVERLAY]["decoration"],
+        }
     for entry in produced.get(Stage.INDEPENDENT_ASSETS, {}).get("items", []):
         keys[entry["assetId"]] = entry["key"]
     return keys

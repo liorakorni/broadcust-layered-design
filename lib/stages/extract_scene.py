@@ -62,6 +62,12 @@ SCENE_SCHEMA = {
                     "align",
                     "direction",
                     "lineHeight",
+                    "letterSpacing",
+                    "fill",
+                    "strokeColor",
+                    "strokeWidth",
+                    "wrap",
+                    "overflow",
                 ],
                 "properties": {
                     "id": {"type": "string"},
@@ -81,6 +87,15 @@ SCENE_SCHEMA = {
                     "align": {"type": "string", "enum": ["left", "right", "center"]},
                     "direction": {"type": "string", "enum": ["rtl", "ltr"]},
                     "lineHeight": {"type": "number"},
+                    # Typography the concept can show beyond size and colour.
+                    # Every one is required in strict mode; the neutral value
+                    # (0, "solid", null, 0, "wrap", "shrink") means "plain text".
+                    "letterSpacing": {"type": "number"},
+                    "fill": {"type": "string", "enum": ["solid", "transparent"]},
+                    "strokeColor": {"type": ["string", "null"]},
+                    "strokeWidth": {"type": "number"},
+                    "wrap": {"type": "string", "enum": ["wrap", "nowrap"]},
+                    "overflow": {"type": "string", "enum": ["shrink", "visible"]},
                 },
             },
         },

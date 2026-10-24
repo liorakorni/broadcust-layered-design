@@ -30,6 +30,9 @@ from lib.errors import AssetInvalid, IdempotencyConflict, JobNotFound, Status, U
 #: and has its expiry removed by `mark_succeeded`.
 JOB_TTL_DAYS = 30
 
+#: Categories a repair can be routed to. Each is counted and bounded on its own.
+REPAIR_CATEGORIES = ("content", "typography", "layout", "asset", "concept")
+
 _table = None
 
 
@@ -113,6 +116,15 @@ def record_overlay_defect(job_id, description):
     )
 
 
+def set_photo_repair(job_id, plan):
+    """Remember the targeted photograph correction the next stage must apply."""
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET photoRepair = :p, updatedAt = :now",
+        ExpressionAttributeValues={":p": plan, ":now": _now()},
+    )
+
+
 def job_exists(job_id):
     """True only when `job_id` has a complete job record.
 
@@ -126,7 +138,7 @@ def job_exists(job_id):
 
 
 def create_job(job_id, owner_scope, request_hash, request_key, canvas,
-               design_freedom=0, review_strictness=None):
+               design_freedom=0, review_strictness=None, flow="legacy"):
     """Record the job as QUEUED before any execution starts."""
     from lib import reference_policy, review_policy
 
@@ -162,6 +174,19 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
             # Seeded for the same reason as the maps above: a nested write to a
             # missing parent is rejected.
             "conceptCandidates": {},
+            # Design state (lib/design_state.py). `designVersion` is the optimistic
+            # concurrency counter for edits; the maps below must exist up front for
+            # the same reason as the ones above.
+            "designVersion": 0,
+            "designCandidates": {},
+            "validationCache": {},
+            "stageCache": {},
+            "routes": {},
+            "metrics": {},
+            # Repair attempts are bounded per category, flat so the bound can be a
+            # simple conditional update.
+            **{f"repairs_{category}": 0 for category in REPAIR_CATEGORIES},
+            "flow": flow,
             "createdAt": _now(),
             "updatedAt": _now(),
             "expiresAt": _ttl(),
@@ -307,6 +332,154 @@ def set_concept_correction(job_id, correction):
         UpdateExpression="SET conceptCorrection = :c, updatedAt = :now",
         ExpressionAttributeValues={":c": correction, ":now": _now()},
     )
+
+
+# --- design state, candidates, caches, routes and metrics -------------------
+
+
+def _nested_write(job_id, parent, expression, names, values):
+    """Run a nested write, creating `parent` first if the job predates it.
+
+    DynamoDB refuses a write into a map that does not exist, and jobs created
+    before these maps were added do not have them.
+    """
+    key = {"pk": f"JOB#{job_id}"}
+    try:
+        _tbl().update_item(
+            Key=key, UpdateExpression=expression,
+            ExpressionAttributeNames=names, ExpressionAttributeValues=values,
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ValidationException":
+            raise
+        _tbl().update_item(
+            Key=key,
+            UpdateExpression="SET #parent = :empty, updatedAt = :now",
+            ExpressionAttributeNames={"#parent": parent},
+            ExpressionAttributeValues={":empty": {}, ":now": _now()},
+        )
+        _tbl().update_item(
+            Key=key, UpdateExpression=expression,
+            ExpressionAttributeNames=names, ExpressionAttributeValues=values,
+        )
+
+
+def set_design_state(job_id, pointer, expected_version=None):
+    """Point the job at its current design snapshot.
+
+    With `expected_version` the write is conditional on `designVersion` still
+    being that value: it returns False when another writer has moved on, so a
+    concurrent edit is detected rather than silently overwritten.
+    """
+    kwargs = {}
+    if expected_version is not None:
+        kwargs["ConditionExpression"] = "designVersion = :expected"
+    values = {":p": pointer, ":v": int(pointer["version"]), ":now": _now()}
+    if expected_version is not None:
+        values[":expected"] = int(expected_version)
+    try:
+        _tbl().update_item(
+            Key={"pk": f"JOB#{job_id}"},
+            UpdateExpression="SET designState = :p, designVersion = :v, updatedAt = :now",
+            ExpressionAttributeValues=values,
+            **kwargs,
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def record_design_candidate(job_id, attempt, record):
+    """Store one assembled-and-reviewed candidate under its attempt."""
+    _nested_write(
+        job_id, "designCandidates", "SET designCandidates.#a = :r, updatedAt = :now",
+        {"#a": str(int(attempt))}, {":r": record, ":now": _now()},
+    )
+
+
+def design_candidates(job):
+    found = job.get("designCandidates") or {}
+    return [found[k] for k in sorted(found, key=int)]
+
+
+def select_design(job_id, selected):
+    """Record which candidate the job will deliver, and why."""
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET selectedDesign = :s, updatedAt = :now",
+        ExpressionAttributeValues={":s": selected, ":now": _now()},
+    )
+
+
+def set_working_scene(job_id, pointer):
+    """Name the scene the next ASSEMBLE must build from (a repaired one)."""
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET workingScene = :w, updatedAt = :now",
+        ExpressionAttributeValues={":w": pointer, ":now": _now()},
+    )
+
+
+def record_diagnostics(job_id, diagnostics):
+    """Persist why a repair loop ended, with the candidate it preserved.
+
+    A raised error's details do not survive the hop through Step Functions (only
+    the message does), so the full diagnostic is stored on the job as well.
+    """
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET repairDiagnostics = :d, updatedAt = :now",
+        ExpressionAttributeValues={":d": diagnostics, ":now": _now()},
+    )
+
+
+def bump_repair(job_id, category, limit):
+    """Consume one repair of `category`, or return None when its budget is spent."""
+    if category not in REPAIR_CATEGORIES:
+        raise ValueError(f"unknown repair category {category!r}")
+    return bump_counter(job_id, f"repairs_{category}", limit)
+
+
+def repair_counts(job):
+    return {c: int(job.get(f"repairs_{c}", 0) or 0) for c in REPAIR_CATEGORIES}
+
+
+def record_route(job_id, attempt, entry):
+    """Persist the routing decision for one review (repair reason and route)."""
+    _nested_write(
+        job_id, "routes", "SET routes.#a = :r, updatedAt = :now",
+        {"#a": str(int(attempt))}, {":r": entry, ":now": _now()},
+    )
+
+
+def cache_get(job, kind, key):
+    """A cached result by key, or None. `kind` is validationCache or stageCache."""
+    return (job.get(kind) or {}).get(key)
+
+
+def cache_put(job_id, kind, key, value):
+    _nested_write(
+        job_id, kind, f"SET {kind}.#k = :v, updatedAt = :now",
+        {"#k": key}, {":v": value, ":now": _now()},
+    )
+
+
+def add_metric(job_id, name, amount=1):
+    """Atomically add to one numeric metric. Best effort: never fails a stage."""
+    try:
+        _nested_write(
+            # "metrics" is a DynamoDB reserved word, so it is always aliased.
+            job_id, "metrics", "ADD #root.#m :n",
+            {"#root": "metrics", "#m": name}, {":n": amount},
+        )
+    except Exception:  # noqa: BLE001 - observability must not break the pipeline
+        import logging
+
+        logging.getLogger("layered-design.metrics").exception(
+            "could not record metric %s", name
+        )
 
 
 def approved_concept(job):

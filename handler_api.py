@@ -87,9 +87,13 @@ def _dispatch_direct(event):
         return get_layered_design_status(
             event.get("jobId"), event.get("trustedCallerContext")
         )
+    if operation == "updateLayeredDesign":
+        return update_layered_design(event.get("request"), event.get("trustedCallerContext"))
+    if operation == "exportLayeredDesign":
+        return export_layered_design(event.get("request"), event.get("trustedCallerContext"))
     raise InvalidRequest(
-        "Missing or unknown operation; expected runLayeredDesign or "
-        "getLayeredDesignStatus."
+        "Missing or unknown operation; expected runLayeredDesign, "
+        "getLayeredDesignStatus, updateLayeredDesign or exportLayeredDesign."
     )
 
 
@@ -141,9 +145,10 @@ def run_layered_design(payload, caller_context):
             {"width": request.canvas.width, "height": request.canvas.height},
             design_freedom=request.designFreedom,
             review_strictness=request.reviewStrictness,
+            flow=request.designFlow,
         )
 
-    _ensure_execution(job_id)
+    _ensure_execution(job_id, request.designFlow)
 
     log.info(json.dumps({"jobId": job_id, "created": created, "op": "run"}))
     return {
@@ -154,7 +159,48 @@ def run_layered_design(payload, caller_context):
     }
 
 
-def _ensure_execution(job_id):
+def update_layered_design(payload, caller_context):
+    """Apply one text/typography/layout edit. No image call, no render.
+
+    See lib/design_edit.py for the contract (expectedVersion, requestId).
+    """
+    from lib import design_edit
+
+    owner_scope = jobs.resolve_owner_scope(caller_context)
+    return design_edit.update(payload, owner_scope)
+
+
+def export_layered_design(payload, caller_context):
+    """Explicit save/export: server-render the current design and return its preview."""
+    import boto3
+
+    from lib import design_edit
+
+    owner_scope = jobs.resolve_owner_scope(caller_context)
+    if not isinstance(payload, dict) or not isinstance(payload.get("jobId"), str):
+        raise InvalidRequest("jobId is required.")
+    job = jobs.get_job(payload["jobId"], owner_scope)  # ownership + existence
+    if job.get("status") != "SUCCEEDED":
+        raise design_edit.DesignNotEditable("Only a finished design can be exported.")
+    response = boto3.client("lambda", region_name=conf.AWS_REGION).invoke(
+        FunctionName=conf.STAGE_FUNCTION_NAME,
+        InvocationType="RequestResponse",
+        Payload=json.dumps({
+            "operation": "EXPORT_DESIGN", "jobId": payload["jobId"],
+            "version": payload.get("expectedVersion"), "ownerScope": owner_scope,
+        }).encode("utf-8"),
+    )
+    body = json.loads(response["Payload"].read())
+    if response.get("FunctionError"):
+        message = (body.get("errorMessage") if isinstance(body, dict) else None) or "Export failed."
+        kind = (body.get("errorType") if isinstance(body, dict) else None) or ""
+        if kind == "StaleDesignVersion":
+            raise design_edit.StaleDesignVersion(message)
+        raise LayeredDesignError(message, stage=Stage.RENDER, code=Code.RENDER_FAILED)
+    return {"success": True, **body["artifacts"]}
+
+
+def _ensure_execution(job_id, flow="legacy"):
     """Start the workflow, or reconcile an execution that already exists.
 
     The execution name is derived from the job ID, so a crash between job
@@ -169,7 +215,7 @@ def _ensure_execution(job_id):
             name=name,
             # `attempt` is seeded here so every downstream state can reference
             # $.attempt without a separate initialising Pass state.
-            input=json.dumps({"jobId": job_id, "attempt": 1}),
+            input=json.dumps({"jobId": job_id, "attempt": 1, "flow": flow}),
         )
         arn = response["executionArn"]
     except ClientError as exc:

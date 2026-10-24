@@ -14,6 +14,10 @@ provider:
     ARTIFACT_BUCKET: ${self:service}-${sls:stage}-artifacts
     STAGE_FUNCTION_NAME: ${self:service}-${sls:stage}-stage
     WORKFLOW_ARN: !Ref LayeredDesignWorkflow
+    # Phase B feature flag. Deploy with `--param="layoutFirst=true"` to enable the
+    # layout-first flow (designFlow: layout-first); off by default.
+    LAYOUT_FIRST_ENABLED: ${param:layoutFirst, 'false'}
+    CODE_SHAPES_ENABLED: ${param:codeShapes, 'true'}
     OPENAI_API_KEY: ${file(./config.${sls:stage}.json):openai_api_key}
     # Only the ARN is an environment variable; the credentials themselves are
     # read from Secrets Manager at cold start, so they never appear in the
@@ -47,7 +51,8 @@ functions:
       command:
         - handler_api.handler
     memorySize: 512
-    timeout: 30
+    # Explicit export invokes the stage Lambda (browser render) synchronously.
+    timeout: 60
     role: ApiRole
 
   stage:
@@ -158,6 +163,19 @@ resources:
                     - s3:PutObjectTagging
                   Resource:
                     !Sub '${ArtifactBucket.Arn}/layered-design/*/ACCEPT_REQUEST/*'
+                # Interactive edits (lib/design_edit.py) write only immutable design
+                # snapshots, again scoped to one stage prefix.
+                - Effect: Allow
+                  Action:
+                    - s3:PutObject
+                    - s3:PutObjectTagging
+                  Resource:
+                    !Sub '${ArtifactBucket.Arn}/layered-design/*/DESIGN_STATE/*'
+                # Explicit export renders on the stage Lambda, which owns the browser.
+                - Effect: Allow
+                  Action: lambda:InvokeFunction
+                  Resource:
+                    !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${self:service}-${sls:stage}-stage'
 
     # Lets the configured Bedrock agent, and only that agent in this account,
     # invoke the API function as an Action Group (SPEC 7.8).

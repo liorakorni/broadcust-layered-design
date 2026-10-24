@@ -20,6 +20,25 @@ TEXT LAYERS:
   (phone, email, website) use direction "ltr".
 - Choose fontFamily only from: {fonts}
 
+TYPOGRAPHY (the text stays real, editable text - never describe it as an image):
+- letterSpacing: extra space between letters in PIXELS (0 when normal; negative
+  when the letters are visibly tight, positive when visibly spaced out).
+- Outlined or hollow lettering: when a headline is drawn as an OUTLINE (letters
+  with a visible edge line and the photograph or background showing through the
+  inside), set fill "transparent", strokeColor to the outline's colour and
+  strokeWidth to the outline's thickness in pixels (typically 2-6). Do not set
+  fill "transparent" unless the inside of the letters is genuinely see-through.
+  When the letters are filled AND have an edge line, keep fill "solid" and set
+  strokeColor and strokeWidth for the edge line.
+- Plain text: fill "solid", strokeColor null, strokeWidth 0.
+- color is the fill colour for solid text (and the nominal colour otherwise).
+- wrap "nowrap" only for a line that must never break (a phone number, a single
+  short line); otherwise "wrap".
+- overflow: always "shrink" unless the text must keep its exact size, in which
+  case "visible".
+- Direction and alignment describe the writing, not the position: a Hebrew block
+  keeps its x and width where it appears in the image whatever its direction.
+
 APPROVED COPY:
 {copy_block}
 

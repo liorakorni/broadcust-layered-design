@@ -23,7 +23,8 @@ from __future__ import annotations
 import io
 import logging
 
-from lib import artifacts, edit_mask, jobs, prompts
+import conf
+from lib import artifacts, edit_mask, jobs, prompts, stage_cache, telemetry
 from lib.errors import AssetInvalid, Stage
 from lib.providers import image
 
@@ -88,6 +89,7 @@ def repair_overlay(job_id, attempt, asset_id=None):
         transparent=True,
         operation_id=f"{job_id}:overlay_repair:{round_number}",
     )
+    telemetry.record_image_call(job_id, Stage.DECORATION_OVERLAY)
 
     key = artifacts.artifact_key(
         job_id, Stage.DECORATION_OVERLAY, attempt, f"overlay-repair-{round_number}.png"
@@ -113,7 +115,7 @@ def repair_overlay(job_id, attempt, asset_id=None):
     }
 
 
-def clean_photo(job_id, attempt, asset_id=None, after_repair=False):
+def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=None):
     """Repaint everything that is not the photograph, keeping the photograph.
 
     Edits the immutable concept under a mask built from the overlay's shape and
@@ -144,7 +146,37 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False):
     log.info("clean photo mask editFraction=%.3f", edit_fraction)
 
     prompt = prompts.render("clean-photo", width=canvas["width"], height=canvas["height"])
+    if instruction:
+        # A targeted correction of this one asset: the finding, appended to the
+        # full prompt so every rule about what to keep still applies.
+        prompt += (
+            "\n\nCORRECTION REQUIRED for this photograph (change only this; keep "
+            f"everything else as it is):\n{instruction}"
+        )
     suffix = f"-after-repair-{int(job.get('overlayRepairs', 0) or 0)}" if after_repair else ""
+    if instruction:
+        suffix = f"-repair-{int(job.get('repairs_asset', 0) or 0)}"
+
+    # Reuse the stored photograph when every input is identical. A repair (with
+    # an instruction, or against a repaired overlay) is a deliberate new
+    # generation and is never answered from the cache.
+    cache_id = None
+    if not after_repair and not instruction:
+        cache_id = stage_cache.key(
+            Stage.CLEAN_PHOTO, concept=artifacts.sha256_hex(concept),
+            overlay=artifacts.sha256_hex(overlay),
+            textBoxes=stage_cache.digest(
+                [(l["x"], l["y"], l["width"], l["height"]) for l in scene["textLayers"]]
+            ),
+            prompt=stage_cache.prompt_digest(prompt), model=conf.IMAGE_MODEL,
+            canvas=canvas,
+        )
+        cached = stage_cache.lookup(job, Stage.CLEAN_PHOTO, cache_id)
+        if cached:
+            stage_cache.hit(job_id, Stage.CLEAN_PHOTO)
+            jobs.record_artifacts(job_id, Stage.CLEAN_PHOTO, attempt, cached["pointers"])
+            return {**cached["result"], "cacheHit": True}
+
     result = image.edit(
         prompt,
         concept,
@@ -154,26 +186,26 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False):
         mask=mask,
         operation_id=f"{job_id}:{Stage.CLEAN_PHOTO}:{attempt}{suffix}",
     )
+    telemetry.record_image_call(job_id, Stage.CLEAN_PHOTO)
 
     key = artifacts.artifact_key(
         job_id, Stage.CLEAN_PHOTO, attempt, f"photo{suffix}.png"
     )
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
-    jobs.record_artifacts(
-        job_id,
-        Stage.CLEAN_PHOTO,
-        attempt,
-        {
-            "background": stored["key"],
-            "sha256": stored["sha256"],
-            "conceptSha256": artifacts.sha256_hex(concept),
-        },
-    )
-    return {
+    pointers = {
+        "background": stored["key"],
+        "sha256": stored["sha256"],
+        "conceptSha256": artifacts.sha256_hex(concept),
+    }
+    jobs.record_artifacts(job_id, Stage.CLEAN_PHOTO, attempt, pointers)
+    out = {
         "background": stored["key"],
         "sha256": stored["sha256"],
         "requestId": result["requestId"],
     }
+    if cache_id:
+        stage_cache.remember(job_id, cache_id, {"pointers": pointers, "result": out})
+    return out
 
 
 def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
@@ -187,6 +219,17 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
     prompt = prompts.render(
         prompt_name, width=canvas["width"], height=canvas["height"]
     )
+    cache_id = stage_cache.key(
+        stage, concept=artifacts.sha256_hex(concept),
+        prompt=stage_cache.prompt_digest(prompt), model=conf.IMAGE_MODEL,
+        canvas=canvas, transparent=transparent,
+    )
+    cached = stage_cache.lookup(job, stage, cache_id)
+    if cached:
+        stage_cache.hit(job_id, stage)
+        jobs.record_artifacts(job_id, stage, attempt, cached["pointers"])
+        return {**cached["result"], "cacheHit": True}
+
     result = image.edit(
         prompt,
         concept,
@@ -195,24 +238,23 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
         transparent=transparent,
         operation_id=f"{job_id}:{stage}:{attempt}",
     )
+    telemetry.record_image_call(job_id, stage)
 
     key = artifacts.artifact_key(job_id, stage, attempt, artifact_name)
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
-    jobs.record_artifacts(
-        job_id,
-        stage,
-        attempt,
-        {
-            label: stored["key"],
-            "sha256": stored["sha256"],
-            "conceptSha256": artifacts.sha256_hex(concept),
-        },
-    )
-    return {
+    pointers = {
+        label: stored["key"],
+        "sha256": stored["sha256"],
+        "conceptSha256": artifacts.sha256_hex(concept),
+    }
+    jobs.record_artifacts(job_id, stage, attempt, pointers)
+    out = {
         label: stored["key"],
         "sha256": stored["sha256"],
         "requestId": result["requestId"],
     }
+    stage_cache.remember(job_id, cache_id, {"pointers": pointers, "result": out})
+    return out
 
 
 def _concept_bytes(job_id, job):
@@ -223,3 +265,20 @@ def _concept_bytes(job_id, job):
     """
     key = jobs.approved_concept(job)["key"]
     return artifacts.get_bytes(job_id, key)
+
+
+def repair_photo(job_id, attempt, asset_id=None):
+    """Regenerate ONLY the photograph, told exactly what was wrong with it.
+
+    The scene, the overlay and every other asset are untouched. The instruction is
+    the routed finding recorded by REPAIR_ASSET.
+    """
+    job = jobs.get_job_unscoped(job_id)
+    if job.get("flow") == "layout-first":
+        from lib.stages import plan_layout
+
+        return plan_layout.repair_photo(job_id, attempt)
+    pending = job.get("photoRepair") or {}
+    if int(pending.get("forAttempt", 0)) != int(attempt):
+        raise AssetInvalid("No photo repair was planned for this attempt.")
+    return clean_photo(job_id, attempt, instruction=pending.get("instruction") or "")

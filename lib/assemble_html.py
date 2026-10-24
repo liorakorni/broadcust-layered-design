@@ -33,7 +33,7 @@ def assemble(scene, assets, canvas):
     "decoration" and each independent assetId.
     """
     width, height = canvas["width"], canvas["height"]
-    children = _image_layers(scene, assets, canvas) + _text_layers(scene)
+    children = _backing_layers(scene, assets, canvas) + _text_layers(scene)
 
     body = "\n".join(_indent(c, 6) for c in children)
     return (
@@ -45,6 +45,88 @@ def assemble(scene, assets, canvas):
         "    </div>\n"
         "  </div>\n"
         "</div>"
+    )
+
+
+def _backing_layers(scene, assets, canvas):
+    """Images and code-owned shapes, interleaved by zIndex.
+
+    A shape may sit between the photograph and the overlay (a readability
+    gradient does), so the two kinds are ordered together rather than one after
+    the other. Without any shapes this is exactly the image layers, unchanged.
+    """
+    images = _image_layers(scene, assets, canvas)
+    shapes = scene.get("shapeLayers") or []
+    if not shapes:
+        return images
+    tagged = []
+    ordered = sorted(scene["imageLayers"], key=lambda item: (item["zIndex"], item["id"]))
+    for layer, html_block in zip(ordered, images):
+        tagged.append((layer["zIndex"], 0, layer["id"], html_block))
+    for number, shape in shape_numbers(scene):
+        tagged.append((shape["zIndex"], 1, shape["id"], _shape(number, shape)))
+    tagged.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in tagged]
+
+
+def shape_numbers(scene):
+    """Pair each shape layer with the number its element id is built from."""
+    return enumerate(
+        sorted(scene.get("shapeLayers") or [], key=lambda item: (item["zIndex"], item["id"])),
+        start=1,
+    )
+
+
+def shape_element_ids(scene):
+    return {shape["id"]: f"shape-{number}" for number, shape in shape_numbers(scene)}
+
+
+def _shape(number, shape):
+    """One code-owned element. Only allowlisted properties, each sanitised."""
+    kind = _enum(shape["kind"], ("panel", "gradient", "circle", "dot", "ring", "border", "chevron"))
+    style = [
+        "position:absolute",
+        f'left:{_px(shape["x"])}',
+        f'top:{_px(shape["y"])}',
+        f'width:{_px(shape["width"])}',
+        f'height:{_px(shape["height"])}',
+        "box-sizing:border-box",
+    ]
+    opacity = _unit(shape.get("opacity", 1.0))
+    if opacity != 1:
+        style.append(f"opacity:{opacity:g}")
+    radius = _int(shape.get("radius", 0), 0, 2048)
+
+    if kind == "gradient":
+        stops = ",".join(
+            f'{_rgba(stop["color"], stop.get("opacity", 1.0))} '
+            f'{round(_unit(stop["position"]) * 100, 2):g}%'
+            for stop in shape["stops"]
+        )
+        # The one place a CSS gradient is emitted: built from validated numbers
+        # and colours only, never from model-supplied CSS text.
+        style.append(f'background:linear-gradient({_int(shape.get("angle", 180), 0, 360)}deg,{stops})')
+        if radius:
+            style.append(f"border-radius:{radius}px")
+    elif kind in ("panel", "circle", "dot"):
+        style.append(f'background-color:{_color(shape["color"])}')
+        style.append("border-radius:50%" if kind != "panel" else f"border-radius:{radius}px")
+    elif kind == "ring":
+        style.append(f'border:{_width(shape["borderWidth"])}px solid {_color(shape["borderColor"])}')
+        style.append("border-radius:50%")
+    elif kind == "border":
+        style.append(f'border:{_width(shape["borderWidth"])}px solid {_color(shape["borderColor"])}')
+        style.append(f"border-radius:{radius}px")
+    else:  # chevron
+        edge = f'{_width(shape["borderWidth"])}px solid {_color(shape["borderColor"])}'
+        style.append(f"border-right:{edge}")
+        style.append(f"border-bottom:{edge}")
+        style.append(f'transform:rotate({_int(shape.get("rotation", 0), 0, 359)}deg)')
+    style.append(f"z-index:{_z(shape)}")
+
+    return (
+        f'<div class="shape s{number}" id="shape-{number}" data-shape="{_attr(kind)}" '
+        f'data-effect="{_attr(shape["effect"])}" style="{";".join(style)};"></div>'
     )
 
 
@@ -127,9 +209,13 @@ def _text_layers(scene):
                 f'font-size:{_px(layer["fontSize"])}',
                 f'font-weight:{_int(layer["fontWeight"], 100, 900)}',
                 f'color:{_color(layer["color"])}',
+                # Physical left/right/center, never start/end: the box stays in its
+                # column whatever the writing direction, so Hebrew does not
+                # mirror a layout that was measured from the left.
                 f'text-align:{_enum(layer["align"], ("left", "right", "center"))}',
                 f'direction:{_enum(layer["direction"], ("rtl", "ltr"))}',
                 f'line-height:{_line_height(layer["lineHeight"])}',
+                *_typography(layer),
                 "box-sizing:border-box",
                 f"z-index:{_z(layer)}",
             ]
@@ -141,6 +227,63 @@ def _text_layers(scene):
             "</div>"
         )
     return out
+
+
+def _typography(layer):
+    """Declarations for the typography beyond the basics, only when non-default.
+
+    A layer that uses none of them emits nothing here, so documents written before
+    these properties existed assemble to byte-identical HTML (and the same hash).
+    """
+    out = []
+    spacing = _number(layer.get("letterSpacing", 0.0), -10, 40, "letterSpacing")
+    if spacing:
+        out.append(f"letter-spacing:{spacing:g}px")
+    if layer.get("wrap", "wrap") == "nowrap":
+        out.append("white-space:nowrap")
+    elif layer.get("wrap", "wrap") != "wrap":
+        raise AssemblyFailed(f"wrap {layer.get('wrap')!r} is not supported.")
+    stroke = _number(layer.get("strokeWidth", 0.0), 0, 24, "strokeWidth")
+    if stroke:
+        # Editable outline text: the glyphs stay real text, only painted with a
+        # stroke. paint-order puts the stroke behind the fill so a solid fill is
+        # not eaten into by the inner half of the line.
+        out.append(f'-webkit-text-stroke:{stroke:g}px {_color(layer.get("strokeColor"))}')
+        if layer.get("fill", "solid") == "solid":
+            out.append("paint-order:stroke fill")
+    fill = layer.get("fill", "solid")
+    if fill == "transparent":
+        out.append("-webkit-text-fill-color:transparent")
+    elif fill != "solid":
+        raise AssemblyFailed(f"fill {fill!r} is not supported.")
+    return out
+
+
+def _number(value, low, high, label):
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise AssemblyFailed(f"{label} {value!r} is not a number.") from exc
+    if not low <= number <= high:
+        raise AssemblyFailed(f"{label} {number} is outside {low}..{high}.")
+    return number
+
+
+def _width(value):
+    return f"{_number(value, 0.1, 48, 'borderWidth'):g}"
+
+
+def _unit(value):
+    return _number(value, 0, 1, "value")
+
+
+def _rgba(color, opacity):
+    color = _color(color)
+    digits = color[1:]
+    if len(digits) == 3:
+        digits = "".join(c * 2 for c in digits)
+    r, g, b = (int(digits[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{_unit(opacity):g})"
 
 
 def _asset_url(layer, assets):

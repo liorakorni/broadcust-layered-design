@@ -57,6 +57,14 @@ def _registry():
     return STAGE_HANDLERS
 
 
+#: operation -> (module in lib.stages, function, stage name for reporting)
+_REPAIR_OPERATIONS = {
+    "REPAIR_LIGHT": ("repair", "light", Stage.REVIEW),
+    "REPAIR_ASSET": ("repair", "asset", Stage.REVIEW),
+    "REPAIR_PHOTO": ("separation", "repair_photo", Stage.CLEAN_PHOTO),
+}
+
+
 def handler(event, context):
     started = time.monotonic()
     job_id = event.get("jobId")
@@ -90,6 +98,40 @@ def handler(event, context):
         )
         _log(job_id, Stage.CLEAN_PHOTO, attempt, started)
         return {"ok": True, "stage": Stage.CLEAN_PHOTO, "artifacts": artifacts}
+
+    # Targeted repairs (lib/stages/repair.py). REPAIR_LIGHT never calls an image
+    # model; REPAIR_ASSET only plans; REPAIR_PHOTO regenerates the photograph alone.
+    if event.get("operation") in _REPAIR_OPERATIONS:
+        module, function, stage_name = _REPAIR_OPERATIONS[event["operation"]]
+        from importlib import import_module
+
+        target = getattr(import_module(f"lib.stages.{module}"), function)
+        try:
+            artifacts = target(job_id=job_id, attempt=attempt)
+        except LayeredDesignError as exc:
+            # The stage travels in the message so RecordFailure reports it.
+            if stage_name not in exc.message:
+                exc.message = f"{exc.message} [{stage_name}]"
+                exc.args = (exc.message,)
+            _log(job_id, event["operation"], attempt, started, error=exc.code)
+            raise
+        # Timed under the operation's own name, so REPAIR_LIGHT is not counted as
+        # REVIEW time: a text-only repair's cost must be separable from a review's.
+        _log(job_id, event["operation"], attempt, started)
+        return {"ok": True, "stage": stage_name, "artifacts": artifacts}
+
+    if event.get("operation") == "EXPORT_DESIGN":
+        # Explicit save/export of an edited design: assemble, render, preview.
+        # Never an image-generation call. Invoked by the API, which has already
+        # authorised the caller for this job.
+        from lib.stages import export_design
+
+        conf.validate(conf.STAGE_REQUIRED)
+        out = export_design.export(
+            job_id, version=event.get("version"), owner_scope=event.get("ownerScope")
+        )
+        _log(job_id, Stage.DESIGN_STATE, attempt, started)
+        return {"ok": True, "stage": Stage.DESIGN_STATE, "artifacts": out}
 
     if event.get("operation") == "CORRECT":
         from lib.stages import review
@@ -249,8 +291,24 @@ def _stage_from_message(message):
     return None
 
 
+def _record_timing(job_id, stage, started):
+    """Add this invocation to the job's per-stage time and run counters.
+
+    Best effort: a metrics failure must never fail a stage that succeeded.
+    """
+    if not job_id:
+        return
+    try:
+        from lib import telemetry
+
+        telemetry.record_stage(job_id, stage, int((time.monotonic() - started) * 1000))
+    except Exception:  # noqa: BLE001
+        log.warning("could not record stage timing for %s", stage)
+
+
 def _log(job_id, stage, attempt, started, error=None):
     """Structured log line. Never contains secrets, base64 or customer content."""
+    _record_timing(job_id, stage, started)
     log.info(
         json.dumps(
             {

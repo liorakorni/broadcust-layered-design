@@ -528,6 +528,9 @@ def test_separation_edits_the_frozen_concept_not_the_latest(pipeline, monkeypatc
     run_stage(job_id, Stage.CONCEPT, attempt=2)
     assert job_of(pipeline)["artifacts"][Stage.CONCEPT]["concept"] != frozen
     pipeline["calls"]["image"].clear()
+    # The stage-output cache would (correctly) answer this identical request
+    # without calling the model, so it is emptied to observe what the model gets.
+    job_of(pipeline)["stageCache"] = {}
     run_stage(job_id, Stage.EXTRACT_SCENE, attempt=2)
     run_stage(job_id, Stage.DECORATION_OVERLAY, attempt=2)
     run_stage(job_id, Stage.CLEAN_PHOTO, attempt=2)
@@ -571,7 +574,7 @@ def test_the_final_review_receives_the_concept_review_as_evidence(pipeline):
         concept_verdict(mode="guided-adaptation")
     )
     run_pipeline(pipeline)
-    call = [c for c in pipeline["calls"]["vision"] if c["schema"] == "review_v1"][0]
+    call = [c for c in pipeline["calls"]["vision"] if c["schema"] == "review_v2"][0]
     assert "guided-adaptation" in call["prompt"]
     assert "designFreedom 50" in call["prompt"]
     assert "business name replaced" in call["prompt"]
@@ -619,7 +622,7 @@ def test_a_drifting_render_fails_even_at_one_hundred(pipeline, monkeypatch):
     real = vision_provider.analyze
 
     def drifting(prompt, images=(), *, schema, schema_name, **kw):
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
             return {"passed": False, "conceptDefect": False, "suggestions": [],
                     "blockingIssues": [{
                         "code": "DRIFT", "layerId": None, "assetId": None,
@@ -639,11 +642,15 @@ def _defect_review(monkeypatch, *, defect=True):
     real = vision_provider.analyze
 
     def reviewer(prompt, images=(), *, schema, schema_name, **kw):
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
             return {"passed": False, "conceptDefect": defect, "suggestions": [],
                     "blockingIssues": [{
                         "code": "CONCEPT_VIOLATES_POLICY", "layerId": None,
-                        "assetId": None, "message": "The concept itself is wrong."}]}
+                        "assetId": None, "message": "The concept itself is wrong.",
+                        "repairTarget": "concept" if defect else "layout",
+                        "requiresImageGeneration": bool(defect),
+                        "affectedElementIds": [], "constraints": [],
+                        "impact": "The concept itself is wrong."}]}
         return real(prompt, images, schema=schema, schema_name=schema_name, **kw)
 
     monkeypatch.setattr(vision_provider, "analyze", reviewer)
@@ -722,9 +729,11 @@ def test_an_exhausted_html_correction_is_recorded_against_review(pipeline):
 
     job_id = pipeline["jobId"]
     # Drive REVIEW to an unapproved verdict, then exhaust the HTML rounds.
-    pipeline["table"].items[f"JOB#{job_id}"]["correctionRounds"] = 2
     review_key = artifacts.artifact_key(job_id, Stage.REVIEW, 1, "review.json")
-    artifacts.put_json(review_key, {"blockingIssues": [{"message": "bad"}]})
+    artifacts.put_json(review_key, {
+        "blockingIssues": [{"message": "bad"}],
+        "routing": {"route": "exhausted", "reason": "the repair budget is spent",
+                    "unresolved": []}})
     pipeline["table"].items[f"JOB#{job_id}"]["artifacts"] = {
         Stage.REVIEW: {"review": review_key}}
     with pytest.raises(CorrectionExhausted) as exc:

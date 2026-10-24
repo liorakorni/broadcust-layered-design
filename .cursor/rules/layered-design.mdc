@@ -48,6 +48,19 @@ If the API rejects one, report it — never substitute a model from memory.
    by default, never one with missing mandatory content). Every stage records the
    `conceptSha256` it used and FINALIZE checks it. Policy/analysis are versioned
    (`POLICY_VERSION`): never reuse an artifact from another version.
+3b. **A review finding is repaired by the cheapest thing that can fix it; only a wrong
+   picture costs an image.** REVIEW classifies each blocking issue (`repairTarget`
+   content/typography/layout/asset/concept, `requiresImageGeneration`, constraints) and
+   `lib/repair_routing.py` validates that before anything is routed. Text, outline,
+   position and code-owned-shape problems are patched in the stored design
+   (`REPAIR_LIGHT`: zero image calls, assets and hashes carried over, all mandatory
+   text re-verified). An unknown or inconsistent classification never starts image
+   generation - it stops with a specific error and the preserved candidate. Wording only
+   ever comes from the approved copy (or, in an interactive edit, from the user). Every
+   visual effect has one owner (`layout`/`photo`/`overlay`); never draw one twice. A
+   validation or stage result is reused only when its key (hashes, model, prompt,
+   policy version) is identical. FINALIZE delivers the best eligible candidate. See
+   `docs/REPAIR_ROUTING.md`.
 4. **All geometry is pixels from the canvas top-left.** `fontSize` is px; `lineHeight`
    is a dimensionless multiplier. Never mix normalized 0-1 coordinates with pixels. Any
    vision call that returns coordinates passes `detail="original"`; anything else

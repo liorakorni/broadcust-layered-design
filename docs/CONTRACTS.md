@@ -206,6 +206,16 @@ Rules (full set in SPEC section 5):
 - Hebrew defaults to `rtl` / `right`; separate Latin contacts use `ltr`.
 - `object-fit: contain` for full-canvas overlays, logos and cutouts; `cover` only for
   intended photo crops.
+- **Amendment (code-owned shapes):** a design may also contain
+  `<div class="shape sN" id="shape-N" data-shape data-effect="…">` elements, direct
+  children of `.box`, ordered with the images by `z-index` (an image precedes a shape
+  at equal `z-index`). They draw panels, gradients, circles, dots, rings, borders and
+  chevrons with plain CSS (`background`, `linear-gradient`, `border`, `border-radius`,
+  `opacity`, `transform: rotate`). Editor/exporter compatibility is unconfirmed; set
+  `CODE_SHAPES_ENABLED=false` to disable them. See docs/REPAIR_ROUTING.md.
+- Text may also carry `letter-spacing`, `white-space:nowrap`, `-webkit-text-stroke`,
+  `paint-order` and `-webkit-text-fill-color:transparent`, only when the scene asks for
+  them; `text-align` is always physical (`left`/`right`/`center`).
 - Forbidden: scripts, SVG, arbitrary CSS, CSS `background-image`, generated final text
   baked into images, and clipping used to hide text defects.
 

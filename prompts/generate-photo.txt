@@ -1,0 +1,11 @@
+Create one photograph for a {width}x{height} marketing post.
+
+{photo_brief}
+
+HARD RULES
+- A photograph only. NO text, letters, numbers, logos, watermarks, borders,
+  frames, panels, banners, badges, icons, chevrons or graphic overlays of any
+  kind. The layout adds all of those separately.
+- Do NOT darken the lower or upper part to simulate a gradient; the layout adds
+  readability gradients itself. Keep natural lighting.
+- Fill the entire frame edge to edge.

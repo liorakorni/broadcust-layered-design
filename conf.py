@@ -85,6 +85,26 @@ MAX_CORRECTION_ROUNDS = 2
 # from the two final HTML correction rounds above.
 MAX_CONCEPT_ROUNDS = 2
 MAX_OVERLAY_REPAIRS = 2
+# Repairs that need no image generation are cheap, but still bounded so a repair
+# that does not converge terminates. Per category: a typography problem and a
+# content problem each get their own budget. `asset` is deliberately small because
+# every one is a paid regeneration. `concept` is the existing concept-round bound.
+#: Code-owned shapes (panels, gradients, ...) emit `<div class="shape">` elements that
+#: are not part of the original HTML contract. This switch exists because their
+#: compatibility with the editor and exporter has not been confirmed from this
+#: repository: turn it off and no shape is ever added or planned.
+CODE_SHAPES_ENABLED = os.environ.get("CODE_SHAPES_ENABLED", "true").lower() == "true"
+
+#: Phase B: the layout-first flow. Off unless explicitly enabled for the deployment.
+LAYOUT_FIRST_ENABLED = os.environ.get("LAYOUT_FIRST_ENABLED", "false").lower() == "true"
+
+MAX_REPAIRS = {
+    "content": 2,
+    "typography": 2,
+    "layout": 2,
+    "asset": 1,
+    "concept": MAX_CONCEPT_ROUNDS,
+}
 WORKFLOW_MAX_MINUTES = 30
 
 # Provider deadlines stay below the stage Lambda's 240s budget so a timeout

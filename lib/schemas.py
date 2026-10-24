@@ -18,7 +18,9 @@ import re
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator,
+)
 
 import conf
 from lib import review_policy
@@ -187,6 +189,26 @@ class StartRequest(Strict):
     # generated. Absent -> "balanced"; explicit null or an unknown value is
     # rejected rather than defaulted.
     reviewStrictness: str = review_policy.DEFAULT_STRICTNESS
+    # How the design is produced. "legacy" generates a flattened concept and
+    # decomposes it; "layout-first" plans an editable layout and generates only the
+    # text-free photograph. Absent -> "legacy". "layout-first" is refused unless the
+    # deployment enables it, and does not support suppliedAssets.
+    designFlow: str = "legacy"
+
+    @field_validator("designFlow", mode="before")
+    @classmethod
+    def _design_flow(cls, v):
+        if v not in ("legacy", "layout-first"):
+            raise ValueError("designFlow must be 'legacy' or 'layout-first'")
+        if v == "layout-first" and not (conf.LAYOUT_FIRST_ENABLED and conf.CODE_SHAPES_ENABLED):
+            raise ValueError("designFlow 'layout-first' is not enabled in this environment")
+        return v
+
+    @model_validator(mode="after")
+    def _flow_assets(self):
+        if self.designFlow == "layout-first" and self.suppliedAssets:
+            raise ValueError("designFlow 'layout-first' does not support suppliedAssets yet")
+        return self
 
     @field_validator("reviewStrictness", mode="before")
     @classmethod
@@ -262,6 +284,8 @@ def canonical_request_hash(request: "StartRequest") -> str:
     # did, or replaying it would read as an idempotency conflict.
     if body.get("reviewStrictness") == review_policy.DEFAULT_STRICTNESS:
         body.pop("reviewStrictness")
+    if body.get("designFlow") == "legacy":
+        body.pop("designFlow")
     canonical = json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
@@ -290,6 +314,22 @@ class TextLayer(Strict):
     direction: Literal["rtl", "ltr"] = "rtl"
     #: Dimensionless multiplier, never pixels.
     lineHeight: float = 1.2
+    # Typography beyond the basics. Every field has a default that reproduces the
+    # pre-existing behaviour exactly, so a scene written before they existed still
+    # validates and still assembles to identical bytes.
+    #: Extra space between letters, in px (negative tightens).
+    letterSpacing: float = 0.0
+    #: "transparent" leaves only the outline (hollow letters); `color` is then
+    #: the layer's nominal colour, not what is painted inside the glyphs.
+    fill: Literal["solid", "transparent"] = "solid"
+    strokeColor: Optional[str] = None
+    #: Outline thickness in px. 0 means no outline.
+    strokeWidth: float = 0.0
+    #: "nowrap" keeps the copy on one line.
+    wrap: Literal["wrap", "nowrap"] = "wrap"
+    #: "shrink": the renderer may reduce the size until the copy fits its box.
+    #: "visible": the size is kept and overflow is reported, never hidden.
+    overflow: Literal["shrink", "visible"] = "shrink"
 
     @field_validator("role")
     @classmethod
@@ -329,6 +369,42 @@ class TextLayer(Strict):
             )
         return v
 
+    @field_validator("letterSpacing")
+    @classmethod
+    def _letter_spacing(cls, v):
+        if not -10.0 <= v <= 40.0:
+            raise ValueError("letterSpacing is in px and must be -10..40")
+        return v
+
+    @field_validator("strokeWidth")
+    @classmethod
+    def _stroke_width(cls, v):
+        if not 0.0 <= v <= 24.0:
+            raise ValueError("strokeWidth is in px and must be 0..24")
+        return v
+
+    @field_validator("strokeColor")
+    @classmethod
+    def _stroke_color(cls, v):
+        if v is not None and not HEX_COLOR.match(v):
+            raise ValueError(f"invalid stroke colour {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _outline_is_complete(self):
+        # An outline needs both a colour and a width, and hollow letters need an
+        # outline: transparent fill with no stroke would render nothing at all.
+        if self.strokeWidth > 0 and not self.strokeColor:
+            raise ValueError(f"layer {self.id!r} has a strokeWidth but no strokeColor")
+        if self.strokeColor and self.strokeWidth <= 0:
+            raise ValueError(f"layer {self.id!r} has a strokeColor but no strokeWidth")
+        if self.fill == "transparent" and self.strokeWidth <= 0:
+            raise ValueError(
+                f"layer {self.id!r} has a transparent fill and no outline, so it "
+                "would not be visible"
+            )
+        return self
+
     @field_validator("zIndex")
     @classmethod
     def _z(cls, v):
@@ -358,6 +434,156 @@ class ImageLayer(Strict):
         return v
 
 
+SHAPE_KINDS = ("panel", "gradient", "circle", "dot", "ring", "border", "chevron")
+#: Effects that may exist once per design. A readability gradient baked into the
+#: photograph AND drawn in code is the double-gradient defect this prevents.
+SINGLETON_EFFECTS = ("readabilityGradient",)
+EFFECT_KINDS = (
+    "readabilityGradient", "panel", "ctaBackground", "badge", "dots", "chevrons",
+    "border", "icon", "other",
+)
+EFFECT_OWNERS = ("layout", "photo", "overlay")
+
+
+class GradientStop(Strict):
+    color: str
+    #: 0 is fully transparent, 1 fully opaque.
+    opacity: float = 1.0
+    #: Position along the gradient line, 0..1.
+    position: float
+
+    @field_validator("color")
+    @classmethod
+    def _color(cls, v):
+        if not HEX_COLOR.match(v):
+            raise ValueError(f"invalid colour {v!r}")
+        return v
+
+    @field_validator("opacity", "position")
+    @classmethod
+    def _unit(cls, v):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("value must be between 0 and 1")
+        return v
+
+
+class ShapeLayer(Strict):
+    """A simple visual element owned by the layout, drawn by code.
+
+    Panels, gradients, circles, rings, borders and chevrons are editable HTML/CSS
+    rather than pixels in a generated image. Each one names the effect it
+    implements (`effect`), and that effect is owned by exactly one thing - this
+    layer - which is what stops the same gradient existing in the photograph and
+    again here.
+    """
+
+    id: str
+    type: Literal["shape"] = "shape"
+    kind: Literal["panel", "gradient", "circle", "dot", "ring", "border", "chevron"]
+    effect: str
+    x: int
+    y: int
+    width: int
+    height: int
+    zIndex: int
+    #: Solid fill for panel, circle and dot.
+    color: Optional[str] = None
+    opacity: float = 1.0
+    radius: int = 0
+    #: Gradient direction in CSS degrees: 180 runs top to bottom, 90 left to right.
+    angle: int = 180
+    stops: list[GradientStop] = Field(default_factory=list, max_length=4)
+    borderColor: Optional[str] = None
+    borderWidth: float = 0.0
+    #: Chevrons point by rotation: 45 down, 135 left, 225 up, 315 right.
+    rotation: int = 0
+
+    @field_validator("color", "borderColor")
+    @classmethod
+    def _color(cls, v):
+        if v is not None and not HEX_COLOR.match(v):
+            raise ValueError(f"invalid colour {v!r}")
+        return v
+
+    @field_validator("opacity")
+    @classmethod
+    def _opacity(cls, v):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("opacity must be between 0 and 1")
+        return v
+
+    @field_validator("zIndex")
+    @classmethod
+    def _z(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("zIndex must be 0..100")
+        return v
+
+    @field_validator("radius")
+    @classmethod
+    def _radius(cls, v):
+        if not 0 <= v <= 2048:
+            raise ValueError("radius must be 0..2048 px")
+        return v
+
+    @field_validator("angle")
+    @classmethod
+    def _angle(cls, v):
+        if not 0 <= v <= 360:
+            raise ValueError("angle must be 0..360 degrees")
+        return v
+
+    @field_validator("borderWidth")
+    @classmethod
+    def _border_width(cls, v):
+        if not 0.0 <= v <= 48.0:
+            raise ValueError("borderWidth must be 0..48 px")
+        return v
+
+    @field_validator("rotation")
+    @classmethod
+    def _rotation(cls, v):
+        if v not in (0, 45, 90, 135, 180, 225, 270, 315):
+            raise ValueError("rotation must be a multiple of 45 degrees")
+        return v
+
+    @model_validator(mode="after")
+    def _complete_for_kind(self):
+        if self.kind == "gradient":
+            if len(self.stops) < 2:
+                raise ValueError(f"gradient {self.id!r} needs at least two stops")
+            positions = [stop.position for stop in self.stops]
+            if positions != sorted(positions):
+                raise ValueError(f"gradient {self.id!r} stops must be in order")
+        elif self.kind in ("panel", "circle", "dot"):
+            if not self.color:
+                raise ValueError(f"{self.kind} {self.id!r} needs a color")
+        else:
+            if not self.borderColor or self.borderWidth <= 0:
+                raise ValueError(
+                    f"{self.kind} {self.id!r} needs a borderColor and borderWidth"
+                )
+        return self
+
+
+class EffectOwner(Strict):
+    """Who is responsible for one visual effect in the finished design.
+
+    Exactly one owner: the layout (a shape layer draws it), the photograph or the
+    overlay (it is baked into that asset's pixels). Declaring the owner is what
+    lets a repair know whether a missing gradient is a code problem it can fix in
+    place, or something baked into an image it must not paint over a second time.
+    """
+
+    id: str
+    kind: Literal[
+        "readabilityGradient", "panel", "ctaBackground", "badge", "dots",
+        "chevrons", "border", "icon", "other",
+    ]
+    owner: Literal["layout", "photo", "overlay"]
+    note: Optional[str] = None
+
+
 class SampleRegion(Strict):
     """A region the overlay must be transparent or opaque in.
 
@@ -377,6 +603,11 @@ class Scene(Strict):
     textLayers: list[TextLayer] = Field(default_factory=list, max_length=60)
     imageLayers: list[ImageLayer] = Field(default_factory=list, max_length=20)
     overlaySamples: list[SampleRegion] = Field(default_factory=list, max_length=20)
+    # Code-owned simple elements and who owns each visual effect. Both default to
+    # empty, which is exactly what every scene written before they existed means:
+    # nothing is drawn in code and no effect has a declared owner.
+    shapeLayers: list[ShapeLayer] = Field(default_factory=list, max_length=40)
+    effects: list[EffectOwner] = Field(default_factory=list, max_length=20)
 
 
 def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
@@ -400,7 +631,7 @@ def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
 
     seen_ids = set()
     seen_keys = set()
-    for layer in list(scene.textLayers) + list(scene.imageLayers):
+    for layer in list(scene.textLayers) + list(scene.imageLayers) + list(scene.shapeLayers):
         if layer.id in seen_ids:
             raise InvalidScene(f"Duplicate layer id {layer.id!r}.")
         seen_ids.add(layer.id)
@@ -426,7 +657,53 @@ def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
             raise InvalidScene(
                 f"fontFamily {layer.fontFamily!r} is not an installed, approved font."
             )
+    check_effect_ownership(scene)
     return scene
+
+
+def check_effect_ownership(scene):
+    """Every visual effect has exactly one owner, and nothing is drawn twice.
+
+    The failure this prevents is two owners for one effect: a dark readability
+    gradient painted into the photograph and again by a shape layer, or an effect
+    declared as layout-owned with nothing in the layout that draws it (it then
+    exists nowhere, and the design silently loses it).
+    """
+    effects = {}
+    for effect in scene.effects:
+        if effect.id in effects:
+            raise InvalidScene(f"Effect {effect.id!r} is declared more than once.")
+        effects[effect.id] = effect
+
+    drawn = {}
+    for shape in scene.shapeLayers:
+        owner = effects.get(shape.effect)
+        if owner is None:
+            raise InvalidScene(
+                f"Shape {shape.id!r} implements effect {shape.effect!r}, which has "
+                "no declared owner."
+            )
+        if owner.owner != "layout":
+            raise InvalidScene(
+                f"Shape {shape.id!r} draws effect {shape.effect!r}, but that effect "
+                f"is owned by the {owner.owner}; drawing it here as well would "
+                "duplicate it."
+            )
+        drawn.setdefault(shape.effect, []).append(shape.id)
+
+    for effect in scene.effects:
+        if effect.owner == "layout" and effect.id not in drawn:
+            raise InvalidScene(
+                f"Effect {effect.id!r} is owned by the layout but no shape draws it."
+            )
+
+    for kind in SINGLETON_EFFECTS:
+        owners = [e for e in scene.effects if e.kind == kind]
+        if len(owners) > 1:
+            raise InvalidScene(
+                f"The design declares {len(owners)} {kind} effects "
+                f"({', '.join(e.id for e in owners)}); there may be only one."
+            )
 
 
 # --------------------------------------------------------------------------
@@ -450,6 +727,14 @@ class NormalizedBox(Strict):
         return v
 
 
+class Constraint(Strict):
+    """One property-level correction for one element."""
+
+    elementId: str
+    property: str
+    value: str
+
+
 class BlockingIssue(Strict):
     """A finding from the final review.
 
@@ -467,6 +752,12 @@ class BlockingIssue(Strict):
     impact: Optional[str] = None
     suggestion: Optional[str] = None
     region: Optional[NormalizedBox] = None
+    # Repair routing. Optional so a review written before they existed still
+    # parses - it then reads as unrouted, which is never a reason to regenerate.
+    repairTarget: Optional[Literal["content", "typography", "layout", "asset", "concept"]] = None
+    affectedElementIds: list[str] = Field(default_factory=list, max_length=20)
+    requiresImageGeneration: Optional[bool] = None
+    constraints: list[Constraint] = Field(default_factory=list, max_length=30)
 
 
 class ReviewVerdict(Strict):

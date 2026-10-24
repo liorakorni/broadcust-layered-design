@@ -48,6 +48,9 @@ them. Otherwise set it to false.
 APPROVED COPY (the only legitimate text):
 {copy_block}
 
+DESIGN ELEMENTS (cite elements ONLY by these ids; the render below is built from them):
+{design_block}
+
 Return strict JSON: passed, blockingIssues, warnings, suggestions and conceptDefect.
 Both blockingIssues and warnings hold entries with: code (short UPPER_SNAKE),
 layerId and assetId (null when not applicable), message, category ("visual",
@@ -56,3 +59,53 @@ element or constraint concerned), impact (what the difference actually does to
 the design - a blocking visual finding without a stated impact is treated as a
 warning), suggestion (the targeted correction when one is needed, else null) and
 region (the normalized box where the problem is, or null).
+
+REPAIR ROUTING. Every issue also says HOW it should be repaired, because the
+cheapest repair that fixes it will be used and image generation is the most
+expensive. Provide:
+- repairTarget: exactly one of
+    "content"    wording is missing, wrong or altered (business name, contact
+                 details, any approved text). The fix is to restore the approved
+                 text; give the content key(s) in affectedElementIds.
+    "typography" how text is set: size, weight, letter spacing, line height,
+                 alignment, direction, colour, fill, OUTLINE (stroke), wrapping.
+                 A missing or wrong outline on a headline is typography.
+    "layout"     where something is or how big: a shifted CTA or badge, a text
+                 box that is too small, overlapping layers, stacking order, a
+                 code-owned shape (gradient, panel, circle) that is missing, the
+                 wrong size or the wrong opacity.
+    "asset"      a generated image is itself wrong (an incorrect photograph, a
+                 baked-in defect). Name the image layer id in affectedElementIds.
+    "concept"    the approved concept itself is fundamentally unbuildable. Use it
+                 ONLY for a fundamental composition failure and set conceptDefect
+                 true; never for text, outline, spacing or position problems.
+- affectedElementIds: the ids of the elements concerned, taken from DESIGN
+  ELEMENTS above (content keys for a content issue).
+- requiresImageGeneration: true ONLY for "asset" and "concept"; false otherwise.
+- constraints: for typography and layout, the exact correction PER ELEMENT as
+  {elementId, property, value} entries. value is always a string. Properties:
+    typography: fontFamily, fontWeight, fontSize, lineHeight, letterSpacing,
+      align, direction, color, fill ("solid" or "transparent"), strokeColor,
+      strokeWidth (px), wrap, overflow
+    layout: x, y, width, height, zIndex (and opacity, radius, angle, color,
+      borderColor, borderWidth, rotation for shapes; objectFit for images).
+      A gradient too faint or too short is fixed with gradientStrength (0-1,
+      the opacity of its darkest end, e.g. "0.95") and width/height - never
+      with a CSS string; colours are always #RRGGBB.
+  Example - a headline whose white outline is missing:
+    repairTarget "typography", affectedElementIds ["primary-title"],
+    constraints [{elementId:"primary-title", property:"strokeColor", value:"#FFFFFF"},
+                 {elementId:"primary-title", property:"strokeWidth", value:"3"}]
+  (use fill "transparent" only for hollow lettering whose interior shows the
+  background; a coloured headline with an outline keeps its fill.)
+  Example - the dark readability gradient behind the text is missing and the
+  design has no readabilityGradient effect: repairTarget "layout",
+    affectedElementIds ["add:readabilityGradient"],
+    constraints [{elementId:"add:readabilityGradient", property:"addShape",
+                  value:"gradient-bottom"}]   (presets: gradient-bottom,
+    gradient-top, gradient-left, gradient-right, panel-bottom, panel-top). Never add one when EFFECT OWNERS
+  above already lists a readabilityGradient, whoever owns it.
+  Constrain only the elements that are actually wrong: a subtitle that is
+  correct stays out of affectedElementIds and constraints. Use [] for content,
+  asset and concept issues.
+Never invent text. Do not request a regeneration for something a property can fix.

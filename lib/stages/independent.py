@@ -17,7 +17,7 @@ of a trademark.
 from __future__ import annotations
 
 import conf
-from lib import artifacts, jobs, reference
+from lib import artifacts, jobs, reference, telemetry
 from lib.errors import ImpossibleContentRequirement, Stage
 from lib.providers import image
 
@@ -112,6 +112,7 @@ def _generate(job_id, attempt, asset_id, layer, request):
         transparent=True,
         operation_id=f"{job_id}:independent:{asset_id}:{attempt}",
     )
+    telemetry.record_image_call(job_id, Stage.INDEPENDENT_ASSETS)
     name = f"assets/{asset_id}.png"
     key = artifacts.artifact_key(job_id, Stage.INDEPENDENT_ASSETS, attempt, name)
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")

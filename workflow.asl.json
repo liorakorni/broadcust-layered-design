@@ -104,7 +104,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "Concept"
+      "Next": "FlowChoice"
     },
     "Concept": {
       "Type": "Task",
@@ -525,7 +525,7 @@
     },
     "ReviewPassed": {
       "Type": "Choice",
-      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it. Anything not approved goes to Correct, which raises CorrectionExhausted when no round is left. It must not go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever. A review that traces its blockers to the approved concept itself (conceptDefect, only reported while a concept round remains) goes to CorrectConcept instead, which regenerates the concept and so invalidates every downstream output.",
+      "Comment": "Backend approval needs zero blocking issues AND passing technical checks. The stage computes this; a model asserting passed:true cannot override it. Anything not approved is routed by the validated classification of its findings (route in the review result): 'light' (content/typography/layout) goes to RepairLight, which patches the design and never calls an image model; 'asset' goes to RepairAsset, which regenerates only the named photograph or overlay; a review that traces its blockers to the approved concept itself goes to CorrectConcept. Every other route (unresolved, exhausted, noProgress) goes to Correct, which stops with a specific diagnostic naming the preserved candidate. None of them may go to RecordFailure directly: that state reads $.failure, which only a Catch sets, so a direct edge ends the execution with States.Runtime and leaves the job RUNNING forever.",
       "Choices": [
         {
           "Variable": "$.review.artifacts.approved",
@@ -536,6 +536,16 @@
           "Variable": "$.review.artifacts.conceptDefect",
           "BooleanEquals": true,
           "Next": "CorrectConcept"
+        },
+        {
+          "Variable": "$.review.artifacts.route",
+          "StringEquals": "light",
+          "Next": "RepairLight"
+        },
+        {
+          "Variable": "$.review.artifacts.route",
+          "StringEquals": "asset",
+          "Next": "RepairAsset"
         }
       ],
       "Default": "Correct"
@@ -543,7 +553,7 @@
     "Correct": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
-      "Comment": "Consumes one bounded correction round. The counter is bounded per job in DynamoDB, not per task retry, so a Lambda retry cannot buy extra rounds.",
+      "Comment": "Terminal precise-failure step for a review that cannot be repaired within budget (unresolved, exhausted or no progress). It records diagnostics and raises a specific error naming the preserved candidate; it never regenerates anything.",
       "Parameters": {
         "jobId.$": "$.jobId",
         "stage": "REVIEW",
@@ -561,16 +571,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "NextAttempt"
-    },
-    "NextAttempt": {
-      "Type": "Pass",
-      "Comment": "Advances the attempt counter and drops stale per-attempt state. Corrections loop back to ExtractScene so the layout is genuinely re-derived - re-running from ValidateAssets would re-check identical assets and produce the identical render.",
-      "Parameters": {
-        "jobId.$": "$.jobId",
-        "attempt.$": "$.correction.artifacts.nextAttempt"
-      },
-      "Next": "ExtractScene"
+      "Next": "Failed"
     },
     "Finalize": {
       "Type": "Task",
@@ -660,6 +661,200 @@
         }
       ],
       "Next": "ExtractScene"
+    },
+    "RepairLight": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Lightweight text/layout repair. Loads the selected design snapshot, patches only the affected content/typography/layout fields, keeps every asset reference and hash, and makes no image-generation call. The budget is bounded per job in DynamoDB.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "REPAIR_LIGHT"
+      },
+      "ResultPath": "$.repair",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "NextRepairAttempt"
+    },
+    "RepairAsset": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Plans a targeted regeneration of exactly the asset the review named and spends the asset budget. Makes no image call itself.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REVIEW",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "REPAIR_ASSET"
+      },
+      "ResultPath": "$.repair",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "NextRepairAttempt"
+    },
+    "NextRepairAttempt": {
+      "Type": "Pass",
+      "Comment": "Advances the attempt. A light repair resumes at AssembleHTML: the patched design is assembled and rendered, then re-reviewed, without touching CONCEPT, EXTRACT_SCENE, CLEAN_PHOTO or DECORATION_OVERLAY.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "attempt.$": "$.repair.artifacts.nextAttempt",
+        "repair.$": "$.repair.artifacts"
+      },
+      "Next": "RepairRoute"
+    },
+    "RepairRoute": {
+      "Type": "Choice",
+      "Comment": "After a repair: a light repair re-assembles; a photo repair regenerates the photograph then re-validates; an overlay repair regenerates the overlay, rebuilds the photograph around it, then re-validates.",
+      "Choices": [
+        {
+          "Variable": "$.repair.next",
+          "StringEquals": "photo",
+          "Next": "RepairPhoto"
+        },
+        {
+          "Variable": "$.repair.next",
+          "StringEquals": "overlay",
+          "Next": "RepairOverlay"
+        }
+      ],
+      "Default": "Assemble"
+    },
+    "RepairPhoto": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Regenerates only the photograph, with the review's finding as the instruction. The scene, overlay and all other assets are untouched.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "CLEAN_PHOTO",
+        "attempt.$": "$.attempt",
+        "assetId": null,
+        "operation": "REPAIR_PHOTO"
+      },
+      "ResultPath": "$.photoRepair",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ValidateAssets",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 1,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "FlowChoice": {
+      "Type": "Choice",
+      "Comment": "The layout-first flow (feature flag; Phase B) plans an editable layout and generates only the text-free photograph. It never enters CONCEPT, EXTRACT_SCENE, DECORATION_OVERLAY or CLEAN_PHOTO. Executions without a flow field are the legacy flow.",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.flow",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.flow",
+              "StringEquals": "layout-first"
+            }
+          ],
+          "Next": "PlanLayout"
+        }
+      ],
+      "Default": "Concept"
+    },
+    "PlanLayout": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "PLAN_LAYOUT",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.layout",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "GeneratePhoto",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "InvalidModelJson",
+            "ProviderError",
+            "ProviderTimeout"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Comment": "Layout-first: plans the editable layout and the text-free photo brief."
+    },
+    "GeneratePhoto": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "GENERATE_PHOTO",
+        "attempt.$": "$.attempt",
+        "assetId": null
+      },
+      "ResultPath": "$.photo",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ValidateAssets",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ProviderError",
+            "ProviderTimeout"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 1,
+          "BackoffRate": 2
+        }
+      ],
+      "Comment": "Layout-first: the only generated image."
     }
   }
 }

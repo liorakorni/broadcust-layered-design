@@ -16,8 +16,8 @@ from __future__ import annotations
 import io
 
 import conf
-from lib import artifacts, jobs, validate_assets
-from lib.errors import InvalidTransparency, OverlayRepairNeeded, Stage
+from lib import artifacts, dependencies, design_state, jobs, scene_patch, validate_assets
+from lib.errors import InvalidScene, InvalidTransparency, OverlayRepairNeeded, Stage
 from lib.providers import vision
 
 COMPOSITE_SCHEMA = {
@@ -46,10 +46,11 @@ COMPOSITE_SCHEMA = {
 FIDELITY_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["displaced", "description"],
+    "required": ["displaced", "description", "missingShading"],
     "properties": {
         "displaced": {"type": "boolean"},
         "description": {"type": "string"},
+        "missingShading": {"enum": ["none", "top", "bottom", "left", "right"]},
     },
 }
 
@@ -63,6 +64,13 @@ Judge ONLY whether image 2 restores the concept's artwork in the same place.
   subject sits materially elsewhere, at a materially different size, or is missing,
   compared with image 1. Small edge differences and the absent text are NOT
   displacement.
+- missingShading: a plain soft dark (black or near-black) shading or fade along ONE
+  edge of image 1 that is absent from image 2 - a translucent gradient or darkened
+  band whose only job is to make text readable over the photograph. Name the edge
+  it hugs ("top", "bottom", "left" or "right"), or "none" when image 2 has it or
+  image 1 has none. The layout draws this in code, so it is NOT displacement:
+  never set displaced, and never mention it in description, because of it. Any
+  OTHER missing element (a coloured panel, ribbon, badge, graphic) is displacement.
 - description: when displaced, name each element and say where it is in image 1
   versus image 2, so the overlay can be repaired. Empty string otherwise."""
 
@@ -105,24 +113,108 @@ def run(job_id, attempt, asset_id=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, Stage.VALIDATE_ASSETS)
 
+    if job.get("flow") == "layout-first":
+        from lib.stages import plan_layout
+
+        return plan_layout.validate_photo(job_id, job, attempt)
+
+    from lib.stages.assemble import scene_key_for
+
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
-    scene = artifacts.get_json(job_id, job["artifacts"][Stage.EXTRACT_SCENE]["scene"])
+    scene = artifacts.get_json(job_id, scene_key_for(job, attempt))
 
     background_key = job["artifacts"][Stage.CLEAN_PHOTO]["background"]
     overlay_key = job["artifacts"][Stage.DECORATION_OVERLAY]["decoration"]
     background = artifacts.get_bytes(job_id, background_key)
     overlay = artifacts.get_bytes(job_id, overlay_key)
-
-    validate_assets.validate_background(background, canvas)
-
     concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
+
+    shas = {
+        "background": artifacts.sha256_hex(background),
+        "decoration": artifacts.sha256_hex(overlay),
+    }
+    concept_sha = artifacts.sha256_hex(concept)
+    compositing = design_state.compositing_hash(scene)
+    entries = {}
+
+    def bound(**extra):
+        return {
+            "assets": dict(shas), "concept": concept_sha, "compositing": compositing, **extra,
+        }
+
+    def checked(name, inputs, compute, *, bind):
+        """Run a check unless this exact check already passed on these inputs.
+
+        The key carries every input (asset hashes, concept, model, prompt and the
+        validation-policy version), so a different photograph, overlay or prompt
+        can never reuse another's result. Only a pass is cached: a failure is
+        acted on, not remembered.
+        """
+        key = dependencies.cache_key(name, **inputs)
+        hit = jobs.cache_get(job, "validationCache", key)
+        if hit and hit.get("status") == "passed":
+            jobs.add_metric(job_id, "validationCacheHits")
+            entries[name] = _entry(key, bind, cache_hit=True)
+            return hit.get("detail")
+        detail = compute()
+        jobs.cache_put(
+            job_id, "validationCache", key,
+            {"status": "passed", **({"detail": detail} if detail else {})},
+        )
+        jobs.add_metric(job_id, "validationCacheMisses")
+        entries[name] = _entry(key, bind, cache_hit=False)
+        return detail
+
+    # Local, deterministic checks are recomputed (they cost milliseconds); their
+    # results are still bound to the hashes they examined.
+    validate_assets.validate_background(background, canvas)
+    entries["photoValidation"] = _entry(
+        dependencies.cache_key("photoValidation", background=shas["background"]),
+        {"assets": {"background": shas["background"]}}, cache_hit=False,
+    )
     try:
         stats = validate_assets.validate_overlay(overlay, scene, canvas)
-        inspect_composites(overlay, concept, canvas, job_id, attempt)
+        entries["overlayValidation"] = _entry(
+            dependencies.cache_key(
+                "overlayValidation", decoration=shas["decoration"],
+                samples=dependencies.digest(scene.get("overlaySamples", [])),
+                canvas=canvas,
+            ),
+            {"assets": {"decoration": shas["decoration"]},
+             "compositing": compositing}, cache_hit=False,
+        )
+        checked(
+            "composites",
+            {"decoration": shas["decoration"], "concept": concept_sha,
+             "model": conf.REVIEW_MODEL, "prompt": dependencies.digest(_COMPOSITE_PROMPT)},
+            lambda: _no_detail(inspect_composites(overlay, concept, canvas, job_id, attempt)),
+            bind={"assets": {"decoration": shas["decoration"]}, "concept": concept_sha},
+        )
         # Regeneration can change alignment. Re-stacking the separated layers and
         # comparing with the approved concept catches material displacement, which
         # is repaired at the asset rather than excused by editing the scene.
-        inspect_fidelity(background, overlay, concept, job_id, attempt)
+        fidelity = checked(
+            "fidelity",
+            {**shas, "concept": concept_sha, "model": conf.REVIEW_MODEL,
+             "prompt": dependencies.digest(_FIDELITY_PROMPT)},
+            lambda: _fidelity_detail(
+                inspect_fidelity(background, overlay, concept, job_id, attempt)
+            ),
+            bind={"assets": dict(shas), "concept": concept_sha},
+        )
+        code_owned = _own_missing_shading(job_id, job, scene, attempt, fidelity)
+        if code_owned and code_owned["action"] == "not-added":
+            # The layout cannot take the gradient (shapes disabled, or no stacking
+            # slot), so it is still missing: the overlay repair is the fallback.
+            error = InvalidTransparency(
+                "The separated layers do not reconstruct the approved concept: the "
+                f"dark shading along the {code_owned['edge']} edge is missing."
+            )
+            error.defect = (
+                f"A soft dark shading fading in from the {code_owned['edge']} edge is "
+                "missing; restore it."
+            )
+            raise error
     except InvalidTransparency as exc:
         # Every rejection records what is wrong, not only the vision ones: a
         # repair that was told the previous round's finding would be repairing
@@ -138,6 +230,9 @@ def run(job_id, attempt, asset_id=None):
         "background": background_key,
         "decoration": overlay_key,
         "alpha": {k: round(v, 4) for k, v in stats.items() if k != "alphaMax"},
+        "entries": entries,
+        "policyVersion": dependencies.VALIDATION_POLICY_VERSION,
+        "codeOwned": code_owned,
     }
     key = artifacts.artifact_key(job_id, Stage.VALIDATE_ASSETS, attempt, "validation.json")
     stored = artifacts.put_json(key, result)
@@ -145,9 +240,69 @@ def run(job_id, attempt, asset_id=None):
         job_id,
         Stage.VALIDATE_ASSETS,
         attempt,
-        {"validation": stored["key"], "conceptSha256": artifacts.sha256_hex(concept)},
+        {
+            "validation": stored["key"],
+            "conceptSha256": concept_sha,
+            "entries": entries,
+            "cacheHits": sorted(n for n, e in entries.items() if e["cacheHit"]),
+        },
     )
     return result
+
+
+def _no_detail(_verdict):
+    return None
+
+
+def _fidelity_detail(verdict):
+    shading = verdict.get("missingShading") or "none"
+    return {"missingShading": shading} if shading != "none" else None
+
+
+def _own_missing_shading(job_id, job, scene, attempt, detail):
+    """Give a readability gradient the concept has and the layers lack to the layout.
+
+    A soft dark fade behind the text is simple CSS. Asking an image model to repaint
+    it is what sent earlier jobs through overlay regeneration that could not
+    succeed, because the model keeps dropping it. When the fidelity check finds
+    only that gradient missing, the layout draws it - one owner, never a second
+    copy - and the final review confirms it on the rendered page. No image call.
+
+    Returns a record of what was done (or why nothing was), for the validation
+    document. Never raises: a scene that cannot take the shape simply goes on to
+    be judged as it is.
+    """
+    edge = (detail or {}).get("missingShading")
+    if not edge:
+        return None
+    existing = [e for e in scene.get("effects", []) if e.get("kind") == "readabilityGradient"]
+    if existing:
+        return {"effect": "readabilityGradient", "edge": edge, "action": "kept",
+                "owner": existing[0]["owner"]}
+    try:
+        patched = scene_patch.add_shape(scene, f"gradient-{edge}")
+    except InvalidScene as exc:
+        return {"effect": "readabilityGradient", "edge": edge, "action": "not-added",
+                "reason": exc.message}
+    key = artifacts.artifact_key(job_id, Stage.VALIDATE_ASSETS, attempt, "scene-code-owned.json")
+    stored = artifacts.put_json(key, patched)
+    jobs.set_working_scene(
+        job_id, {"key": stored["key"], "forAttempt": int(attempt), "baseVersion": 0}
+    )
+    jobs.add_metric(job_id, "codeOwnedEffects")
+    return {"effect": "readabilityGradient", "edge": edge, "action": "added",
+            "owner": "layout", "scene": stored["key"], "imageGenerationCalls": 0}
+
+
+def _entry(key, bound_to, *, cache_hit):
+    return {
+        "status": "passed",
+        "key": key,
+        "boundTo": bound_to,
+        "policyVersion": dependencies.VALIDATION_POLICY_VERSION,
+        "model": conf.REVIEW_MODEL,
+        "cacheHit": cache_hit,
+    }
 
 
 def inspect_composites(overlay_bytes, concept_bytes, canvas, job_id, attempt):

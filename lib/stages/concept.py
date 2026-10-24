@@ -30,7 +30,9 @@ import io
 import json
 import logging
 
-from lib import artifacts, edit_mask, jobs, policy_context, prompts, reference, review_policy
+from lib import (
+    artifacts, edit_mask, jobs, policy_context, prompts, reference, review_policy, telemetry,
+)
 from lib.errors import AssetInvalid, Stage
 from lib.providers import image
 
@@ -170,6 +172,7 @@ def _generate(job_id, attempt, request, policy, analysis, copy_items, placements
         operation_id=f"{job_id}:concept:{attempt}",
         mime=inspiration["mimeType"],
     )
+    telemetry.record_image_call(job_id, Stage.CONCEPT)
     return _store(job_id, attempt, result, {})
 
 
@@ -211,6 +214,7 @@ def _correct(job_id, attempt, request, policy, analysis, copy_items, placements,
         operation_id=f"{job_id}:concept:{attempt}",
         mime="image/png",
     )
+    telemetry.record_image_call(job_id, Stage.CONCEPT)
 
     record = {
         "baseAttempt": plan["base"]["attempt"],

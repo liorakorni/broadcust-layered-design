@@ -270,12 +270,16 @@ def _inspect(page, canvas):
                 if (el.scrollHeight > el.clientHeight + 1) {
                     problems.push({code: 'TEXT_OVERFLOW', layerId: el.id,
                         message: `Text in ${el.id} is ${el.scrollHeight}px tall `
-                            + `in a ${el.clientHeight}px box`});
+                            + `in a ${el.clientHeight}px box`,
+                        measured: {axis: 'height', content: el.scrollHeight,
+                                   box: el.clientHeight}});
                 }
                 if (el.scrollWidth > el.clientWidth + 1) {
                     problems.push({code: 'TEXT_OVERFLOW', layerId: el.id,
                         message: `Text in ${el.id} is ${el.scrollWidth}px wide `
-                            + `in a ${el.clientWidth}px box`});
+                            + `in a ${el.clientWidth}px box`,
+                        measured: {axis: 'width', content: el.scrollWidth,
+                                   box: el.clientWidth}});
                 }
                 if (!inner.textContent.trim()) {
                     problems.push({code: 'EMPTY_TEXT', layerId: el.id,
@@ -283,7 +287,7 @@ def _inspect(page, canvas):
                 }
             }
 
-            for (const el of document.querySelectorAll('.words, .badges, .background')) {
+            for (const el of document.querySelectorAll('.words, .badges, .background, .shape')) {
                 const r = el.getBoundingClientRect();
                 if (r.left < -1 || r.top < -1
                     || r.right > canvas.width + 1

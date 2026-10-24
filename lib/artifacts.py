@@ -123,8 +123,17 @@ def get_bytes(job_id, key):
     return response["Body"].read()
 
 
+def json_default(value):
+    """Serialise what DynamoDB hands back: numbers arrive as Decimal."""
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def put_json(key, obj, *, overwrite=False):
-    data = json.dumps(obj, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    data = json.dumps(obj, ensure_ascii=False, sort_keys=True, default=json_default).encode("utf-8")
     return put_bytes(
         key, data, "application/json; charset=utf-8", overwrite=overwrite
     )
@@ -170,7 +179,7 @@ def canonical_manifest_hash(entries):
         ),
         key=lambda e: e["assetId"],
     )
-    payload = json.dumps(ordered, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    payload = json.dumps(ordered, ensure_ascii=False, sort_keys=True, default=json_default).encode("utf-8")
     return sha256_hex(payload)
 
 

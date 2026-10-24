@@ -132,27 +132,79 @@ def test_every_task_catches_failures_to_record_them():
             assert state.get("Catch"), f"{name} has no Catch"
 
 
-def test_correction_loops_back_far_enough_to_change_the_design():
-    """Re-entering at ValidateAssets would re-check identical assets and
-    produce a byte-identical render, so the loop would burn both rounds
-    achieving nothing."""
-    assert STATES["Correct"]["Next"] == "NextAttempt"
-    assert STATES["NextAttempt"]["Next"] == "ExtractScene"
+def test_correct_is_a_terminal_diagnostic_not_another_full_pass():
+    """A review that cannot be routed to a bounded repair ends the job with a
+    specific error. It no longer loops back through ExtractScene, which paid for
+    every image again whatever the finding was."""
+    assert "NextAttempt" not in STATES
+    assert STATES["Correct"]["Next"] == "Failed"
+    assert STATES["Correct"]["Catch"][0]["Next"] == "RecordFailure"
 
 
-def test_correction_advances_the_attempt_counter():
-    """Artifact keys include the attempt and are immutable, so a second round
-    reusing attempt 1 would fail on the conditional write."""
+def _reachable(start, *, stop=()):
+    seen, pending = set(), [start]
+    while pending:
+        name = pending.pop()
+        if name in seen or name in stop:
+            continue
+        seen.add(name)
+        state = STATES[name]
+        pending += [state.get("Next"), state.get("Default")]
+        pending += [c.get("Next") for c in state.get("Choices", [])]
+        pending = [p for p in pending if p]
+    return seen
+
+
+def test_a_light_repair_resumes_at_assembly_and_never_touches_an_image_stage():
+    """The text/layout path: patch -> assemble -> render -> review."""
+    assert STATES["ReviewPassed"]["Choices"][2] == {
+        "Variable": "$.review.artifacts.route", "StringEquals": "light", "Next": "RepairLight"}
+    assert STATES["RepairLight"]["Parameters"]["operation"] == "REPAIR_LIGHT"
+    assert STATES["RepairLight"]["Next"] == "NextRepairAttempt"
+    assert STATES["RepairRoute"]["Default"] == "Assemble"
+    paid = {"Concept", "ExtractScene", "DecorationOverlay", "CleanPhoto", "RebuildPhoto",
+            "RepairOverlay", "RepairPhoto", "IndependentAssets", "PlanLayout", "GeneratePhoto"}
+    # Everything between the repair and the next review, before the routing choice.
+    reach = _reachable("RepairLight", stop={"RepairPhoto", "RepairOverlay", "ReviewPassed"})
+    assert reach & paid == set()
+    assert {"Assemble", "Render", "Review"} <= reach
+
+
+def test_an_asset_repair_regenerates_only_the_named_asset_then_revalidates():
+    assert STATES["RepairAsset"]["Parameters"]["operation"] == "REPAIR_ASSET"
+    routes = {c["StringEquals"]: c["Next"] for c in STATES["RepairRoute"]["Choices"]}
+    assert routes == {"photo": "RepairPhoto", "overlay": "RepairOverlay"}
+    assert STATES["RepairPhoto"]["Parameters"]["operation"] == "REPAIR_PHOTO"
+    assert STATES["RepairPhoto"]["Next"] == "ValidateAssets"
+    assert STATES["RepairOverlay"]["Next"] == "RebuildPhoto"
+
+
+def test_repairs_advance_the_attempt_counter():
+    """Artifact keys include the attempt and are immutable, so a repair reusing
+    attempt 1 would fail on the conditional write."""
     assert (
-        STATES["NextAttempt"]["Parameters"]["attempt.$"]
-        == "$.correction.artifacts.nextAttempt"
+        STATES["NextRepairAttempt"]["Parameters"]["attempt.$"]
+        == "$.repair.artifacts.nextAttempt"
     )
+    for name in ("RepairLight", "RepairAsset"):
+        assert STATES[name]["ResultPath"] == "$.repair"
+
+
+def test_the_layout_first_flow_never_enters_the_legacy_decomposition():
+    choice = STATES["FlowChoice"]
+    assert choice["Default"] == "Concept"
+    assert choice["Choices"][0]["Next"] == "PlanLayout"
+    reach = _reachable("PlanLayout", stop={"ReviewPassed"})
+    assert reach & {"Concept", "ReviewConcept", "ExtractScene", "DecorationOverlay",
+                    "CleanPhoto", "IndependentAssets"} == set()
+    assert STATES["GeneratePhoto"]["Next"] == "ValidateAssets"
 
 
 def test_stages_rerun_by_the_correction_loop_use_the_live_attempt():
     rerun = ("Concept", "ReviewConcept", "ExtractScene", "DecorationOverlay",
              "CleanPhoto", "RebuildPhoto", "IndependentAssets", "ValidateAssets",
-             "Assemble", "Render", "Review", "Finalize")
+             "Assemble", "Render", "Review", "Finalize", "RepairLight", "RepairAsset",
+             "RepairPhoto", "PlanLayout", "GeneratePhoto")
     for name in rerun:
         params = STATES[name]["Parameters"]
         assert params.get("attempt.$") == "$.attempt", name
@@ -178,7 +230,8 @@ def test_unapproved_review_always_reaches_correct():
     Catch is what supplies $.failure. Skipping it is what stranded a live job."""
     choice = STATES["ReviewPassed"]
     assert choice["Default"] == "Correct"
-    assert [c["Next"] for c in choice["Choices"]] == ["Finalize", "CorrectConcept"]
+    assert [c["Next"] for c in choice["Choices"]] == [
+        "Finalize", "CorrectConcept", "RepairLight", "RepairAsset"]
     assert STATES["Correct"]["Catch"][0]["Next"] == "RecordFailure"
 
 
@@ -208,11 +261,14 @@ def test_review_routes_a_concept_defect_to_concept_repair_after_approval():
 def test_new_stages_sit_at_their_spec_positions():
     pipeline = list(Stage.PIPELINE)
     assert pipeline.index("ANALYZE_REFERENCE") == pipeline.index("PREPARE_COPY") + 1
-    assert pipeline.index("CONCEPT") == pipeline.index("ANALYZE_REFERENCE") + 1
+    # The layout-first stages sit between analysis and the legacy concept.
+    assert pipeline.index("CONCEPT") > pipeline.index("ANALYZE_REFERENCE")
+    assert pipeline.index("PLAN_LAYOUT") == pipeline.index("ANALYZE_REFERENCE") + 1
     assert pipeline.index("REVIEW_CONCEPT") == pipeline.index("CONCEPT") + 1
     assert pipeline.index("EXTRACT_SCENE") == pipeline.index("REVIEW_CONCEPT") + 1
     assert STATES["PrepareCopy"]["Next"] == "AnalyzeReference"
-    assert STATES["AnalyzeReference"]["Next"] == "Concept"
+    assert STATES["AnalyzeReference"]["Next"] == "FlowChoice"
+    assert STATES["FlowChoice"]["Default"] == "Concept"
     assert STATES["Concept"]["Next"] == "ReviewConcept"
     assert STATES["ReviewConcept"]["Next"] == "ConceptApproved"
 

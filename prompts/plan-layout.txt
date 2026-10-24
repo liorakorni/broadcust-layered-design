@@ -1,0 +1,44 @@
+Design the layout of a marketing post as an EDITABLE document, and describe the
+photograph it needs. Image 1 is a REFERENCE for structure and style only: its
+composition, hierarchy, colour mood and type treatment. It is NOT a template to
+copy: do not reproduce its subject, wording, brand or logo.
+
+CANVAS: exactly {width}x{height} pixels. Coordinates are PIXELS from the TOP-LEFT.
+Every layer must fit inside the canvas. zIndex is an integer 0..100.
+
+{policy_block}
+
+Post: {post}
+{brand_block}
+{instructions_block}
+
+APPROVED COPY (the only legitimate text; every text layer quotes one item EXACTLY,
+never reworded, translated or extended, and no key is used twice):
+{copy_block}
+
+PLANNED POSITIONS (normalized boxes, a starting point you may refine):
+{placement_block}
+
+WHAT TO PRODUCE
+1. textLayers: one per copy item, with real typography. Hebrew uses direction
+   "rtl"; a column's x and width stay where the composition needs them whatever
+   the direction. Latin contact details use "ltr". Choose fontFamily only from:
+   {fonts}
+   An outlined headline is real text with strokeColor and strokeWidth (fill
+   "solid"), or fill "transparent" for hollow lettering. letterSpacing in px.
+   wrap "nowrap" only for a line that must not break; overflow "shrink".
+2. shapeLayers: draw simple elements IN CODE, never in the photograph. Dark
+   panels and readability gradients, call-to-action backgrounds, circles, dots,
+   rings, borders, chevrons and basic badges. Each shape names an `effect` id that
+   it implements; declare every effect in `effects` with owner "layout". There may
+   be only ONE readabilityGradient (kind "readabilityGradient"). A gradient has
+   `stops` (colour, opacity 0..1, position 0..1) and an `angle` in CSS degrees
+   (180 runs top to bottom). Use at most 4 stops. A ring, border or chevron MUST have a borderColor (#RRGGBB) and a borderWidth above 0; a panel, circle or dot MUST have a color. Use [] stops for non-gradients.
+3. imageLayers: exactly ONE, of type "background" with assetId null, the
+   full-canvas photograph at zIndex 0. No other image layers.
+4. Stack: photograph (0) < shapes < text. Text must remain readable over what is
+   under it: that is what the gradients and panels are for.
+5. photoBrief: a description of ONLY the photograph - subject, setting, lighting,
+   colour, composition and where the calm areas are for text and panels. It must
+   describe a photograph with NO text, letters, numbers, logos, borders, panels,
+   gradients, badges or any graphic overlay: those are drawn by the layout.

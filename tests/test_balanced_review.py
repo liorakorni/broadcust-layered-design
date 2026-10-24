@@ -255,6 +255,7 @@ def test_omitted_and_explicit_balanced_hash_identically_and_like_before(start_pa
     # it would read as an idempotency conflict.
     body = parse_start_request(omitted).model_dump(mode="json")
     body.pop("reviewStrictness")
+    body.pop("designFlow")
     import hashlib
     legacy = hashlib.sha256(
         json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1050,7 +1051,7 @@ def test_warnings_ride_along_with_a_successful_result(pipeline, monkeypatch):
     real = vision_provider.analyze
 
     def reviewer(prompt, images=(), *, schema, schema_name, **kw):
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
             return {"passed": True, "conceptDefect": False, "suggestions": [],
                     "blockingIssues": [],
                     "warnings": [{
@@ -1085,7 +1086,7 @@ def _final_review(monkeypatch, issues, *, passed=False):
     real = vision_provider.analyze
 
     def reviewer(prompt, images=(), *, schema, schema_name, **kw):
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
             return {"passed": passed, "conceptDefect": False, "suggestions": [],
                     "blockingIssues": issues, "warnings": []}
         return real(prompt, images, schema=schema, schema_name=schema_name, **kw)
@@ -1299,9 +1300,15 @@ def _defect_review(monkeypatch, issues):
     real = vision_provider.analyze
 
     def reviewer(prompt, images=(), *, schema, schema_name, **kw):
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
+            # The reviewer must also CLASSIFY the finding: a concept defect that
+            # arrives without a valid repair classification is never acted on.
+            routed = [{**i, "repairTarget": "concept", "requiresImageGeneration": True,
+                       "affectedElementIds": [], "constraints": [],
+                       "impact": i.get("impact") or "the approved concept cannot be built"}
+                      for i in issues]
             return {"passed": False, "conceptDefect": True, "suggestions": [],
-                    "blockingIssues": issues, "warnings": []}
+                    "blockingIssues": routed, "warnings": []}
         return real(prompt, images, schema=schema, schema_name=schema_name, **kw)
 
     monkeypatch.setattr(vision_provider, "analyze", reviewer)

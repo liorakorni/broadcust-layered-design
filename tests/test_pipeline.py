@@ -328,7 +328,7 @@ def pipeline(monkeypatch):
             if concept_verdicts:
                 return concept_verdicts.pop(0)
             return concept_verdict(prompt)
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
             return {"passed": True, "blockingIssues": [], "warnings": [],
                     "suggestions": [], "conceptDefect": False}
         raise AssertionError(f"unexpected schema {schema_name}")
@@ -495,7 +495,7 @@ def test_scene_extraction_requests_original_detail(pipeline):
 
 def test_review_sees_concept_native_and_feed(pipeline):
     run_pipeline(pipeline)
-    review = [c for c in pipeline["calls"]["vision"] if c["schema"] == "review_v1"]
+    review = [c for c in pipeline["calls"]["vision"] if c["schema"] == "review_v2"]
     assert review and review[0]["images"] == 3
 
 

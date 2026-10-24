@@ -131,6 +131,16 @@ different photograph is not a failure. Under `"balanced"` review:
 Warnings come back with a successful result as `result.warnings` (and `qa.warnings`).
 Nothing that was already in the response changed.
 
+### `designFlow`
+
+`"legacy"` (default) generates a concept and decomposes it into layers.
+`"layout-first"` (only where the deployment enables it) plans an editable layout and
+generates just a text-free photograph. Either way, a wording, outline or position
+problem is repaired by patching the design, **not** by regenerating images. Edits to a
+finished design use `updateLayeredDesign` / `exportLayeredDesign` - see
+docs/REPAIR_ROUTING.md for the contract (`expectedVersion`, `requestId`, no image
+generation per edit).
+
 ### Response
 
 ```json

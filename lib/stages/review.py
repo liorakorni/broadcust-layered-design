@@ -15,8 +15,15 @@ delivered HTML hash still matches what ASSEMBLE produced (SPEC section 4).
 from __future__ import annotations
 
 import conf
-from lib import artifacts, jobs, media, prompts, review_policy, schemas
-from lib.errors import CorrectionExhausted, FinalHashMismatch, ReviewBlocked, Stage
+from lib import (
+    artifacts, content_check, design_state, telemetry, jobs, media, prompts, repair_routing, review_policy,
+    scene_patch, schemas,
+)
+from lib import candidates as candidates_module
+from lib.errors import (
+    CorrectionExhausted, FinalHashMismatch, MandatoryContentMissing, RepairNoProgress,
+    RepairRouteUnresolved, ReviewBlocked, Stage,
+)
 from lib.providers import vision
 
 _BOX = {
@@ -37,6 +44,7 @@ _ISSUE = {
     "required": [
         "code", "layerId", "assetId", "message", "category", "severity",
         "affected", "impact", "suggestion", "region",
+        "repairTarget", "affectedElementIds", "requiresImageGeneration", "constraints",
     ],
     "properties": {
         "code": {"type": "string"},
@@ -51,6 +59,23 @@ _ISSUE = {
         "impact": {"type": "string"},
         "suggestion": {"type": ["string", "null"]},
         "region": {"anyOf": [{"type": "null"}, _BOX]},
+        # Structured repair routing (lib/repair_routing.py).
+        "repairTarget": {"type": "string", "enum": list(repair_routing.TARGETS)},
+        "affectedElementIds": {"type": "array", "items": {"type": "string"}},
+        "requiresImageGeneration": {"type": "boolean"},
+        "constraints": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["elementId", "property", "value"],
+                "properties": {
+                    "elementId": {"type": "string"},
+                    "property": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+            },
+        },
     },
 }
 
@@ -113,25 +138,28 @@ def run(job_id, attempt, asset_id=None):
 
     produced = job["artifacts"]
     copy_items = artifacts.get_json(job_id, produced[Stage.PREPARE_COPY]["copy"])["items"]
-    concept = artifacts.get_bytes(job_id, jobs.approved_concept(job)["key"])
+    basis = _basis(job_id, job)
     native = artifacts.get_bytes(job_id, produced[Stage.RENDER]["native"])
     feed = artifacts.get_bytes(job_id, produced[Stage.RENDER]["feed"])
-
-    concept_review = artifacts.get_json(job_id, jobs.approved_concept(job)["reviewKey"])
+    # The scene and document THIS attempt assembled (text fitting may have changed
+    # the scene), which is what REVIEW and every repair must reason about.
+    scene = artifacts.get_json(job_id, produced[Stage.ASSEMBLE]["scene"])
+    html = artifacts.get_bytes(job_id, produced[Stage.ASSEMBLE]["html"]).decode("utf-8")
 
     prompt = prompts.render(
-        "review",
+        basis["promptName"],
         severity_block=review_policy.severity_block(
-            reference_policy_review(job, concept_review)
+            reference_policy_review(job, basis["conceptReview"])
         ),
         copy_block=prompts.copy_block(copy_items),
-        concept_review_block=_concept_review_block(concept_review),
+        concept_review_block=basis["block"],
+        design_block=repair_routing.describe_design(scene, produced[Stage.ASSEMBLE]["assets"]),
     )
     raw = vision.analyze(
         prompt,
-        (concept, native, feed),
+        (basis["image"], native, feed),
         schema=REVIEW_SCHEMA,
-        schema_name="review_v1",
+        schema_name="review_v2",
         model=conf.REVIEW_MODEL,
         operation_id=f"{job_id}:review:{attempt}",
         detail="original",
@@ -147,7 +175,15 @@ def run(job_id, attempt, asset_id=None):
     ]
     issues, _ = review_policy.split_issues(reported)
     warnings = [i for i in reported if i["severity"] != review_policy.BLOCKING]
-    issues.extend(_render_problems(produced))
+    issues.extend(_render_problems(produced, scene, job))
+
+    # Mandatory text is verified in code on every candidate, not left to the
+    # model: a repair that touched typography or layout is exactly the change that
+    # can quietly drop a line.
+    content_issues = content_check.check(scene, copy_items, html)
+    known = {(i["code"], i["affected"]) for i in issues}
+    issues.extend(i for i in content_issues if (i["code"], i["affected"]) not in known)
+    mandatory_ok = not content_issues
 
     render_checks = _render_checks(produced.get(Stage.RENDER, {}))
     for check in render_checks:
@@ -157,6 +193,8 @@ def run(job_id, attempt, asset_id=None):
                     "RENDER_CHECK_MISSING",
                     check["name"],
                     f"Render check {check['name']!r} did not run, so it cannot count as passing.",
+                    target="layout",
+                    rerender=True,
                 )
             )
 
@@ -165,7 +203,7 @@ def run(job_id, attempt, asset_id=None):
     # either direction - a "failed" with nothing blocking behind it is an
     # unexplained veto, and minor visual differences alone must not fail a job.
     approved = not issues
-    approved_concept = jobs.approved_concept(job)
+    routing = _route(job, scene, copy_items, produced, issues, verdict, approved, attempt)
     result = {
         "approved": approved,
         "modelPassed": verdict.passed,
@@ -179,28 +217,149 @@ def run(job_id, attempt, asset_id=None):
         "htmlHash": produced[Stage.ASSEMBLE]["htmlHash"],
         "renderKey": produced[Stage.RENDER]["native"],
         "renderSha256": artifacts.sha256_hex(native),
-        # And of the concept it was judged against: FINALIZE proves the selected
-        # candidate is the one every stage used.
-        "conceptSha256": artifacts.sha256_hex(concept),
-        # The workflow's Choice needs to know whether another round is available
-        # before it branches, so the rounds already used are reported here.
-        "correctionAvailable": (
-            int(job.get("correctionRounds", 0)) < conf.MAX_CORRECTION_ROUNDS
+        # And of what it was judged against: FINALIZE proves the selected basis
+        # is the one every stage used.
+        "conceptSha256": basis["sha256"],
+        "mandatoryContentOk": mandatory_ok,
+        # How the findings were routed, and so what happens next.
+        "routing": routing,
+        "route": routing["route"],
+        # Kept for the workflow and existing callers: true exactly when the review
+        # justified regenerating the concept and a concept round remains.
+        "conceptDefect": routing["route"] == repair_routing.ROUTE_CONCEPT,
+        # Retained for compatibility: a Choice used to read it before routing.
+        "correctionAvailable": routing["route"] in (
+            repair_routing.ROUTE_LIGHT, repair_routing.ROUTE_ASSET,
         ),
-        # Routes to CorrectConcept. Only reported while a concept round is left:
-        # otherwise CorrectConcept would end the job with REFERENCE_ADHERENCE_FAILED
-        # when an ordinary HTML correction might still have fixed it.
-        "conceptDefect": bool(
-            not approved
-            and verdict.conceptDefect
-            and int(job.get("conceptRounds", 0)) < conf.MAX_CONCEPT_ROUNDS
-        ),
-        "conceptReviewKey": approved_concept["reviewKey"],
+        "conceptReviewKey": basis["reviewKey"],
     }
     key = artifacts.artifact_key(job_id, Stage.REVIEW, attempt, "review.json")
     stored = artifacts.put_json(key, result)
     jobs.record_artifacts(job_id, Stage.REVIEW, attempt, {"review": stored["key"]})
+    _record_candidate(job_id, job, attempt, result, stored["key"], produced, issues, warnings)
+    jobs.record_route(job_id, attempt, {
+        "route": routing["route"],
+        "reason": routing["reason"],
+        "categories": routing.get("categories", []),
+        "blocking": [
+            {"code": i["code"], "target": i.get("repairTarget"), "affected": i["affected"]}
+            for i in issues
+        ],
+        "imageGenerationRequired": routing["imageGenerationRequired"],
+    })
     return {**result, "review": stored["key"]}
+
+
+def _basis(job_id, job):
+    """What the render is judged against: the approved concept, or the layout plan.
+
+    The legacy flow judges against the concept image it separated into layers. The
+    layout-first flow has no concept: the render is judged against the reference's
+    structure and the layout that was planned, with the reference's subject matter
+    explicitly out of scope.
+    """
+    if job.get("flow") == "layout-first":
+        return layout_basis(job_id, job)
+    approved = jobs.approved_concept(job)
+    concept_review = artifacts.get_json(job_id, approved["reviewKey"])
+    return {
+        "image": artifacts.get_bytes(job_id, approved["key"]),
+        "sha256": approved["sha256"],
+        "conceptReview": concept_review,
+        "block": _concept_review_block(concept_review),
+        "reviewKey": approved["reviewKey"],
+        "promptName": "review",
+    }
+
+
+def layout_basis(job_id, job):
+    """The review basis for a layout-first job (see lib/stages/plan_layout.py)."""
+    from lib.stages import plan_layout
+
+    return plan_layout.review_basis(job_id, job)
+
+
+def _route(job, scene, copy_items, produced, issues, verdict, approved, attempt):
+    """Validate each blocking issue's classification and decide the route."""
+    if approved:
+        return {
+            "route": repair_routing.ROUTE_APPROVE, "reason": "approved", "categories": [],
+            "issues": [], "unresolved": [], "imageGenerationRequired": False,
+        }
+    ctx = {
+        "scene": scene,
+        "copyKeys": {item["contentKey"] for item in copy_items},
+        "assetForLayer": repair_routing.asset_for_layers(scene),
+        "assetIds": {e["assetId"] for e in produced[Stage.ASSEMBLE]["assets"]},
+        "fonts": conf.APPROVED_FONT_FAMILIES,
+        # A layout-first design has no concept to regenerate, so the review cannot
+        # justify that route however it answers.
+        "conceptJustified": bool(verdict.conceptDefect) and job.get("flow") != "layout-first",
+    }
+    counts = jobs.repair_counts(job)
+    counts["concept"] = int(job.get("conceptRounds", 0) or 0)
+    candidates = jobs.design_candidates(job)
+    applied = [c["patchDigest"] for c in candidates if c.get("patchDigest") and c.get("route") == repair_routing.ROUTE_LIGHT]
+    routing = repair_routing.plan_route(
+        issues, ctx, counts=counts, limits=conf.MAX_REPAIRS, applied_patches=applied
+    )
+    # No meaningful improvement: the previous candidate was repaired and the
+    # findings are about the same things. Repeating the repair would not help.
+    now = repair_routing.fingerprint(issues)
+    previous = candidates[-1] if candidates else None
+    repaired = (
+        previous is not None
+        and previous.get("route") in (repair_routing.ROUTE_LIGHT, repair_routing.ROUTE_ASSET)
+    )
+    stalled = repaired and previous.get("fingerprint") == now
+    # A repair that made the design worse is not built on: it has more blocking
+    # findings than the candidate it started from, so more repairing from here
+    # would be compounding a regression. The better candidate stays available.
+    regressed = repaired and len(issues) > int(previous.get("blockingCount", 0))
+    if routing["route"] in (repair_routing.ROUTE_LIGHT, repair_routing.ROUTE_ASSET) and (
+        stalled or regressed
+    ):
+        routing = {
+            **routing,
+            "route": repair_routing.ROUTE_NO_PROGRESS,
+            "reason": (
+                "the previous repair left the same findings on the same elements"
+                if stalled else
+                "the previous repair introduced more blocking findings than it fixed"
+            ),
+            "imageGenerationRequired": False,
+        }
+    routing["fingerprint"] = now
+    return routing
+
+
+def _record_candidate(job_id, job, attempt, result, review_key, produced, issues, warnings):
+    """Keep this attempt as a candidate: its snapshot, render and review."""
+    assembled = produced[Stage.ASSEMBLE]
+    routing = result["routing"]
+    jobs.record_design_candidate(
+        job_id,
+        attempt,
+        {
+            "attempt": int(attempt),
+            "approved": result["approved"],
+            "mandatoryContentOk": result["mandatoryContentOk"],
+            "blockingCount": len(issues),
+            "warningCount": len(warnings),
+            "fingerprint": routing.get("fingerprint"),
+            "route": routing["route"],
+            "patchDigest": routing.get("patchDigest"),
+            "snapshotVersion": (assembled.get("snapshot") or {}).get("version"),
+            "snapshotKey": (assembled.get("snapshot") or {}).get("key"),
+            "reviewKey": review_key,
+            "htmlHash": assembled["htmlHash"],
+            "pointers": {
+                Stage.ASSEMBLE: assembled,
+                Stage.RENDER: produced[Stage.RENDER],
+                Stage.REVIEW: {"review": review_key},
+            },
+        },
+    )
 
 
 def _concept_review_block(concept_review):
@@ -226,11 +385,25 @@ def _final_issue(issue):
     normalized = review_policy.normalize_issue(raw)
     normalized["layerId"] = raw.get("layerId")
     normalized["assetId"] = raw.get("assetId")
+    # Routing fields are carried verbatim: validating them is routing's job, and
+    # repairing them here would turn an untrustworthy classification into a
+    # trustworthy-looking one.
+    normalized["repairTarget"] = raw.get("repairTarget")
+    normalized["affectedElementIds"] = list(raw.get("affectedElementIds") or [])
+    normalized["requiresImageGeneration"] = raw.get("requiresImageGeneration")
+    normalized["constraints"] = list(raw.get("constraints") or [])
     return normalized
 
 
-def _technical_issue(code, affected, message, layer_id=None):
-    issue = {
+def _technical_issue(code, affected, message, layer_id=None, *, target=None,
+                     element_ids=(), constraints=(), rerender=False):
+    """A mechanical finding, with the routing the backend itself knows.
+
+    The renderer and the content check measured these, so the repair target and
+    the constraints are decided here rather than asked of a model. `target` is
+    None for a finding that has no bounded repair, which routes as unresolved.
+    """
+    return {
         "code": code,
         "category": review_policy.TECHNICAL,
         "severity": review_policy.BLOCKING,
@@ -241,8 +414,12 @@ def _technical_issue(code, affected, message, layer_id=None):
         "message": message,
         "layerId": layer_id,
         "assetId": None,
+        "repairTarget": target,
+        "affectedElementIds": list(element_ids),
+        "requiresImageGeneration": False if target else None,
+        "constraints": list(constraints),
+        "rerender": rerender,
     }
-    return issue
 
 
 def reference_policy_review(job, concept_review):
@@ -258,53 +435,154 @@ def reference_policy_review(job, concept_review):
     )
 
 
-def _render_problems(produced):
-    """Fold the renderer's mechanical findings into the verdict.
+def _render_problems(produced, scene, job):
+    """Fold the renderer's mechanical findings into the verdict, routed.
 
     A model looking at a screenshot cannot reliably tell that text overflowed its
     box by a few pixels; the DOM measurement can, and it is never wrong about it.
-    These are technical findings, always blocking.
+    These are technical findings, always blocking - and each carries the repair
+    the measurement implies, so none of them needs a model to be routed.
     """
-    return [
-        _technical_issue(
-            problem["code"],
-            problem.get("layerId") or "render",
-            problem["message"],
-            layer_id=problem.get("layerId"),
+    from lib import assemble_html
+
+    canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
+    element_to_layer = {v: k for k, v in assemble_html.element_ids(scene).items()}
+    element_to_layer.update({v: k for k, v in assemble_html.shape_element_ids(scene).items()})
+    layers = {l["id"]: l for l in scene["textLayers"]}
+    issues = []
+    for problem in produced.get(Stage.RENDER, {}).get("problems", []):
+        element = problem.get("layerId")
+        layer_id = element_to_layer.get(element)
+        code = problem["code"]
+        target, constraints, ids = None, [], ([layer_id] if layer_id else [])
+        if code == "TEXT_OVERFLOW" and layer_id in layers:
+            fixed = repair_routing.overflow_constraints(
+                layers[layer_id], problem.get("measured"), canvas
+            )
+            if fixed:
+                target, constraints = fixed
+        elif code == "EMPTY_TEXT" and layer_id in layers:
+            target, ids = "content", [layers[layer_id]["contentKey"]]
+        elif code == "OUT_OF_BOUNDS" and layer_id:
+            kind, layer = scene_patch.layer_kind(scene, layer_id)
+            clamp = repair_routing.clamp_constraints(layer, canvas) if layer else []
+            if clamp and kind in ("text", "shape"):
+                target, constraints = "layout", clamp
+        issues.append(
+            _technical_issue(
+                code,
+                layer_id or element or "render",
+                problem["message"],
+                layer_id=problem.get("layerId"),
+                target=target,
+                element_ids=ids,
+                constraints=constraints,
+            )
         )
-        for problem in produced.get(Stage.RENDER, {}).get("problems", [])
-    ]
+    return issues
 
 
 def correct(job_id, attempt, asset_id=None):
-    """Consume one bounded correction round.
+    """End the repair loop: nothing routable remains, so fail precisely.
 
-    The bound is a DynamoDB conditional update so it holds per job rather than
-    per task retry: without that, a Lambda retry would silently buy extra rounds
-    and an unfixable design could loop until the workflow timed out.
+    The workflow reaches this state only when the review neither approved the
+    design nor routed it to a repair that can still run. It no longer regenerates
+    anything: regeneration is the expensive path, and it had been the answer to
+    every finding whether or not an image was what was wrong. What it does is name
+    why the loop ended and preserve the best candidate so far.
     """
     jobs.set_stage(job_id, Stage.REVIEW)
     job = jobs.get_job_unscoped(job_id)
     review = artifacts.get_json(job_id, job["artifacts"][Stage.REVIEW]["review"])
+    routing = review.get("routing") or {}
+    route = routing.get("route") or repair_routing.ROUTE_UNRESOLVED
+    candidates = jobs.design_candidates(job)
+    best = candidates_module.repair_base(candidates)
 
-    used = jobs.bump_counter(job_id, "correctionRounds", conf.MAX_CORRECTION_ROUNDS)
-    if used is None:
-        raise CorrectionExhausted(
-            f"The design still has blocking issues after "
-            f"{conf.MAX_CORRECTION_ROUNDS} correction rounds: "
-            + "; ".join(i["message"] for i in review["blockingIssues"][:5])
+    summary = "; ".join(i["message"] for i in review["blockingIssues"][:5])
+    preserved = candidates_module.describe_preserved(candidates)
+    diagnostics = {
+        "route": route,
+        "reason": routing.get("reason"),
+        "unresolved": routing.get("unresolved", []),
+        "preservedCandidate": (
+            {"attempt": best["attempt"], "snapshotKey": best.get("snapshotKey"),
+             "blockingCount": best.get("blockingCount"),
+             "mandatoryContentOk": best.get("mandatoryContentOk")}
+            if best else None
+        ),
+        "repairCounts": jobs.repair_counts(job),
+    }
+    jobs.record_diagnostics(job_id, diagnostics)
+
+    # Missing mandatory text outranks every other reason: the closest candidate
+    # cannot be delivered however the loop ended.
+    if best is not None and not best.get("mandatoryContentOk"):
+        error = MandatoryContentMissing(
+            "Mandatory approved text is missing from every candidate: "
+            + summary + f". {preserved}."
         )
-
-    # The next attempt re-runs the scene and separation stages against the same
-    # concept, so the correction is a fresh layout rather than a patch.
-    return {"round": used, "nextAttempt": int(attempt) + 1}
+    elif route == repair_routing.ROUTE_NO_PROGRESS:
+        error = RepairNoProgress(
+            f"The repair did not improve the design ({routing.get('reason')}): "
+            f"{summary}. {preserved}."
+        )
+    elif route == repair_routing.ROUTE_EXHAUSTED:
+        error = CorrectionExhausted(
+            f"The design still has blocking issues after the bounded repairs "
+            f"({routing.get('reason')}): {summary}. {preserved}."
+        )
+    else:
+        reasons = "; ".join(
+            f"{u['code']}: {', '.join(u['problems'])}" for u in routing.get("unresolved", [])[:3]
+        )
+        error = RepairRouteUnresolved(
+            "The review's findings could not be routed to a bounded repair"
+            f" ({reasons or routing.get('reason')}), so no image was generated: "
+            f"{summary}. {preserved}."
+        )
+    error.details = diagnostics
+    raise error
 
 
 def finalize(job_id, attempt, asset_id=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, Stage.FINALIZE)
 
-    produced = job["artifacts"]
+    # Deliver the best ELIGIBLE candidate, not whichever was assembled last. A
+    # candidate qualifies only if it was approved and carries every mandatory
+    # text; the artifacts that describe it (document, render, review) are read
+    # from its own record, so nothing from a later, rejected attempt can leak in.
+    candidates = jobs.design_candidates(job)
+    selected = None
+    if candidates:
+        selected = candidates_module.select_deliverable(candidates)
+        if selected is None:
+            best = candidates_module.repair_base(candidates)
+            if best is not None and not best.get("mandatoryContentOk"):
+                raise MandatoryContentMissing(
+                    "No candidate carries all of the approved text, so none can be "
+                    f"delivered: {candidates_module.describe_preserved(candidates)}."
+                )
+            raise ReviewBlocked(
+                "No candidate was approved, so none can be delivered: "
+                + candidates_module.describe_preserved(candidates)
+            )
+        produced = {**job["artifacts"], **selected["pointers"]}
+        # Edits are made against what was delivered, so that becomes the current
+        # design (a new version when it is not the last one assembled).
+        design_state.deliver(job_id, job, selected)
+        jobs.select_design(
+            job_id,
+            {
+                "attempt": selected["attempt"],
+                "snapshotKey": selected.get("snapshotKey"),
+                "htmlHash": selected["htmlHash"],
+                "reason": candidates_module.selection_reason(selected, candidates),
+            },
+        )
+    else:
+        produced = job["artifacts"]
     review = artifacts.get_json(job_id, produced[Stage.REVIEW]["review"])
     if not review["approved"]:
         raise ReviewBlocked(
@@ -315,7 +593,7 @@ def finalize(job_id, attempt, asset_id=None):
     # Reaching FINALIZE is not enough: success needs every mandatory downstream
     # check to have actually completed, and every stage to have worked from the
     # one selected concept.
-    approved_concept = jobs.approved_concept(job)
+    approved_concept = _finalize_basis(job_id, job)
     _require_downstream_complete(job, produced, review, approved_concept)
 
     html_key = produced[Stage.ASSEMBLE]["html"]
@@ -361,7 +639,7 @@ def finalize(job_id, attempt, asset_id=None):
 
     # The QA record is built here rather than in REVIEW because assetManifestHash
     # is final only now: it includes the published preview.
-    concept_review = artifacts.get_json(job_id, approved_concept["reviewKey"])
+    concept_review = approved_concept["review"]
     # Non-blocking findings travel with the successful result. They never
     # blocked anything; they are reported so a caller can see what differs.
     warnings = _warnings(concept_review, review)
@@ -374,6 +652,20 @@ def finalize(job_id, attempt, asset_id=None):
         "reason": approved_concept.get("selectionReason"),
         "selectionKey": approved_concept.get("selectionKey"),
     }
+    design_selection = (
+        {
+            "attempt": selected["attempt"],
+            "snapshotKey": selected.get("snapshotKey"),
+            "reason": candidates_module.selection_reason(selected, candidates),
+            "candidates": [
+                {"attempt": c["attempt"], "approved": c["approved"],
+                 "blockingCount": c["blockingCount"], "warningCount": c["warningCount"],
+                 "mandatoryContentOk": c["mandatoryContentOk"], "route": c.get("route")}
+                for c in candidates
+            ],
+        }
+        if selected else None
+    )
     qa = {
         "passed": review["approved"],
         "designFreedom": int(job["designFreedom"]),
@@ -396,6 +688,8 @@ def finalize(job_id, attempt, asset_id=None):
         "renderSha256": review["renderSha256"],
         "htmlHash": html_hash,
         "assetManifestHash": manifest_hash,
+        "designSelection": design_selection,
+        "repairRoutes": telemetry.routes(job),
     }
 
     result = {
@@ -418,6 +712,10 @@ def finalize(job_id, attempt, asset_id=None):
         # Additive and backward compatible: absent keys mean nothing to report.
         "warnings": warnings,
         "conceptSelection": selection,
+        "designSelection": design_selection,
+        # What it cost to produce: time per stage, image-generation calls, cache
+        # hits and the route of every repair. Additive; nothing else changed.
+        "metrics": telemetry.summary(jobs.get_job_unscoped(job_id)),
         # References to objects the pipeline already stores. Compact transports
         # return these instead of the HTML itself.
         "resultKey": result_key,
@@ -442,6 +740,7 @@ def finalize(job_id, attempt, asset_id=None):
             approved_concept["reviewKey"],
             approved_concept["key"],
             *([approved_concept["selectionKey"]] if approved_concept.get("selectionKey") else []),
+            *([selected["snapshotKey"]] if selected and selected.get("snapshotKey") else []),
             produced[Stage.ANALYZE_REFERENCE]["policy"],
             job["requestKey"],
             stored["key"],
@@ -467,6 +766,18 @@ _REQUIRED_POINTERS = (
     (Stage.REVIEW, "review"),
 )
 
+#: The layout-first flow has no concept and no overlay: the layout plan and the
+#: generated photograph are what the later stages are required to have used.
+_REQUIRED_POINTERS_LAYOUT_FIRST = (
+    (Stage.PLAN_LAYOUT, "scene"),
+    (Stage.GENERATE_PHOTO, "background"),
+    (Stage.VALIDATE_ASSETS, "validation"),
+    (Stage.ASSEMBLE, "html"),
+    (Stage.RENDER, "native"),
+    (Stage.RENDER, "feed"),
+    (Stage.REVIEW, "review"),
+)
+
 #: Stages that record which concept they worked from.
 _CONCEPT_PROVENANCE = (
     Stage.EXTRACT_SCENE,
@@ -475,16 +786,35 @@ _CONCEPT_PROVENANCE = (
     Stage.VALIDATE_ASSETS,
 )
 
+_LAYOUT_PROVENANCE = (Stage.GENERATE_PHOTO, Stage.VALIDATE_ASSETS)
+
+
+def _finalize_basis(job_id, job):
+    """The frozen thing every stage worked from, with its settled review.
+
+    For the legacy flow that is the approved concept. For the layout-first flow it
+    is the layout plan, whose "review" is the plan's own validation record.
+    """
+    if job.get("flow") == "layout-first":
+        from lib.stages import plan_layout
+
+        return plan_layout.finalize_basis(job_id, job)
+    approved = dict(jobs.approved_concept(job))
+    approved["review"] = artifacts.get_json(job_id, approved["reviewKey"])
+    return approved
+
 
 def _require_downstream_complete(job, produced, review, approved_concept):
-    """Refuse to succeed unless every mandatory check ran and used the selected concept.
+    """Refuse to succeed unless every mandatory check ran and used the selected basis.
 
     Concept acceptance is not job success. Layer separation, asset validation,
     editable HTML, rendering and final review all have to have completed, the
     render checks must each have passed (a check that did not run is not a pass),
-    and every stage must have worked from the concept that was selected.
+    and every stage must have worked from the concept (or layout plan) that was
+    selected.
     """
-    for stage, pointer in _REQUIRED_POINTERS:
+    layout_first = job.get("flow") == "layout-first"
+    for stage, pointer in (_REQUIRED_POINTERS_LAYOUT_FIRST if layout_first else _REQUIRED_POINTERS):
         if not (produced.get(stage) or {}).get(pointer):
             raise ReviewBlocked(
                 f"Mandatory stage output {stage}.{pointer} is missing, so the "
@@ -499,7 +829,7 @@ def _require_downstream_complete(job, produced, review, approved_concept):
             + ", ".join(sorted(set(not_passed) | (required - reported)))
         )
     selected = approved_concept["sha256"]
-    for stage in _CONCEPT_PROVENANCE:
+    for stage in (_LAYOUT_PROVENANCE if layout_first else _CONCEPT_PROVENANCE):
         used = (produced.get(stage) or {}).get("conceptSha256")
         if used != selected:
             raise FinalHashMismatch(
@@ -509,6 +839,12 @@ def _require_downstream_complete(job, produced, review, approved_concept):
     if review.get("conceptSha256") != selected:
         raise FinalHashMismatch(
             "The final review judged a different concept from the selected one."
+        )
+    # Mandatory text is verified one last time on the document being delivered.
+    if not review.get("mandatoryContentOk", False):
+        raise MandatoryContentMissing(
+            "The delivered design is missing approved text, so it cannot be "
+            "reported as succeeded."
         )
 
 

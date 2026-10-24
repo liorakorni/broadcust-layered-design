@@ -288,7 +288,7 @@ def test_finalize_refuses_a_blocked_design(pipeline, monkeypatch):
     real = vision_provider.analyze
 
     def blocking(prompt, images=(), *, schema_name, **kwargs):
-        if schema_name == "review_v1":
+        if schema_name == "review_v2":
             return {
                 "passed": False,
                 "blockingIssues": [
@@ -306,17 +306,26 @@ def test_finalize_refuses_a_blocked_design(pipeline, monkeypatch):
         run_stage(pipeline["jobId"], Stage.FINALIZE)
 
 
-def test_correction_rounds_are_bounded_per_job(pipeline):
+def test_the_terminal_correct_step_never_regenerates_and_names_why(pipeline):
+    """CORRECT no longer advances to another full pass. It ends the loop with a
+    specific diagnostic and spends nothing, however often it is invoked."""
     through(pipeline, Stage.REVIEW)
     job_id = pipeline["jobId"]
+    review_key = pipeline["table"].items[f"JOB#{job_id}"]["artifacts"][Stage.REVIEW]["review"]
+    review = artifacts.get_json(job_id, review_key)
+    stuck = {**review, "approved": False,
+             "blockingIssues": [{"message": "bad", "code": "X"}],
+             "routing": {"route": "exhausted", "reason": "the repair budget is spent",
+                         "unresolved": []}}
+    stuck_key = artifacts.artifact_key(job_id, Stage.REVIEW, 9, "review.json")
+    artifacts.put_json(stuck_key, stuck)
+    pipeline["table"].items[f"JOB#{job_id}"]["artifacts"][Stage.REVIEW]["review"] = stuck_key
+    rounds = pipeline["table"].items[f"JOB#{job_id}"].get("correctionRounds", 0)
 
-    for expected in range(1, conf.MAX_CORRECTION_ROUNDS + 1):
-        result = handler_correct(job_id, expected)
-        assert result["round"] == expected
-        assert result["nextAttempt"] == expected + 1
-
-    with pytest.raises(CorrectionExhausted, match="correction rounds"):
-        handler_correct(job_id, conf.MAX_CORRECTION_ROUNDS + 1)
+    for attempt in (1, 2, 3):
+        with pytest.raises(CorrectionExhausted, match="repair budget is spent"):
+            handler_correct(job_id, attempt)
+    assert pipeline["table"].items[f"JOB#{job_id}"].get("correctionRounds", 0) == rounds
 
 
 def handler_correct(job_id, attempt):

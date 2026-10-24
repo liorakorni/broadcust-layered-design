@@ -34,6 +34,14 @@ class Stage:
     RENDER = "RENDER"
     REVIEW = "REVIEW"
     FINALIZE = "FINALIZE"
+    # Layout-first flow (a feature flag). They replace CONCEPT through
+    # DECORATION_OVERLAY for a job started with designFlow "layout-first".
+    PLAN_LAYOUT = "PLAN_LAYOUT"
+    GENERATE_PHOTO = "GENERATE_PHOTO"
+    # Artifact namespaces rather than workflow stages: immutable design snapshots
+    # and the record of each repair. They appear in artifact keys only.
+    DESIGN_STATE = "DESIGN_STATE"
+    REPAIR = "REPAIR"
 
     #: Pipeline order. ACCEPT_REQUEST is excluded: it happens in the API Lambda
     #: before the workflow exists.
@@ -41,6 +49,8 @@ class Stage:
         PREFLIGHT,
         PREPARE_COPY,
         ANALYZE_REFERENCE,
+        PLAN_LAYOUT,
+        GENERATE_PHOTO,
         CONCEPT,
         REVIEW_CONCEPT,
         EXTRACT_SCENE,
@@ -54,7 +64,7 @@ class Stage:
         FINALIZE,
     )
 
-    ALL = (ACCEPT_REQUEST,) + PIPELINE
+    ALL = (ACCEPT_REQUEST,) + PIPELINE + (DESIGN_STATE, REPAIR)
 
 
 class Status:
@@ -112,6 +122,14 @@ class Code:
     MEDIA_DELIVERY_UNAVAILABLE = "MEDIA_DELIVERY_UNAVAILABLE"
     FINAL_HASH_MISMATCH = "FINAL_HASH_MISMATCH"
 
+    # Repair routing and design editing
+    REPAIR_ROUTE_UNRESOLVED = "REPAIR_ROUTE_UNRESOLVED"
+    REPAIR_NO_PROGRESS = "REPAIR_NO_PROGRESS"
+    MANDATORY_CONTENT_MISSING = "MANDATORY_CONTENT_MISSING"
+    STALE_DESIGN_VERSION = "STALE_DESIGN_VERSION"
+    DESIGN_NOT_EDITABLE = "DESIGN_NOT_EDITABLE"
+    INVALID_EDIT = "INVALID_EDIT"
+
     INTERNAL = "INTERNAL"
 
 
@@ -142,13 +160,19 @@ class LayeredDesignError(Exception):
             self.retryable = retryable
 
     def to_dict(self):
-        return {
+        out = {
             "stage": self.stage,
             "code": self.code,
             "message": self.message,
             "retryable": self.retryable,
             "category": self.category,
         }
+        # Additive: only present for failures that carry diagnostics, such as the
+        # candidate a failed repair loop preserved.
+        details = getattr(self, "details", None)
+        if details:
+            out["details"] = details
+        return out
 
 
 class InvalidRequest(LayeredDesignError):
@@ -325,6 +349,56 @@ class ReviewBlocked(LayeredDesignError):
 class CorrectionExhausted(LayeredDesignError):
     stage = Stage.REVIEW
     code = Code.CORRECTION_EXHAUSTED
+
+
+class RepairRouteUnresolved(LayeredDesignError):
+    """The review's findings could not be routed to a bounded repair.
+
+    Raised instead of regenerating: a classification that is missing, unknown or
+    inconsistent never triggers image generation. The best candidate so far is
+    preserved and named in the message.
+    """
+
+    stage = Stage.REVIEW
+    code = Code.REPAIR_ROUTE_UNRESOLVED
+    retryable = False
+
+
+class RepairNoProgress(LayeredDesignError):
+    """A repair did not change the outcome, and repeating it would not either."""
+
+    stage = Stage.REVIEW
+    code = Code.REPAIR_NO_PROGRESS
+    retryable = False
+
+
+class MandatoryContentMissing(LayeredDesignError):
+    """A candidate lacks mandatory approved text, so it can never be delivered."""
+
+    stage = Stage.REVIEW
+    code = Code.MANDATORY_CONTENT_MISSING
+    category = "content"
+    retryable = False
+
+
+class StaleDesignVersion(LayeredDesignError):
+    """An edit was made against a version of the design that is no longer current."""
+
+    stage = Stage.ACCEPT_REQUEST
+    code = Code.STALE_DESIGN_VERSION
+    retryable = False
+
+
+class DesignNotEditable(LayeredDesignError):
+    stage = Stage.ACCEPT_REQUEST
+    code = Code.DESIGN_NOT_EDITABLE
+    retryable = False
+
+
+class InvalidEdit(LayeredDesignError):
+    stage = Stage.ACCEPT_REQUEST
+    code = Code.INVALID_EDIT
+    retryable = False
 
 
 class ReferenceAdherenceFailed(LayeredDesignError):

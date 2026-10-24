@@ -50,6 +50,16 @@ class FakeTable:
         def resolve(token):
             return names.get(token, token)
 
+        # DynamoDB rejects an update that names a reserved word unaliased. This is
+        # how an unaliased `metrics` silently lost every metric on the real service.
+        for word in ("metrics",):
+            if re.search(rf"(?<![#\w]){word}\b", UpdateExpression):
+                raise ClientError(
+                    {"Error": {"Code": "ValidationException",
+                               "Message": f"Attribute name is a reserved keyword: {word}"}},
+                    "UpdateItem",
+                )
+
         if ConditionExpression:
             if ConditionExpression == "attribute_not_exists(executionArn)":
                 if item.get("executionArn"):
@@ -58,6 +68,24 @@ class FakeTable:
                 m = re.match(r"^(\w+) < :limit$", ConditionExpression)
                 if m and item.get(m.group(1), 0) >= values[":limit"]:
                     raise _conditional_failure("UpdateItem")
+                m = re.match(r"^(\w+) = (:\w+)$", ConditionExpression)
+                if m and item.get(m.group(1)) != values[m.group(2)]:
+                    raise _conditional_failure("UpdateItem")
+
+        # `ADD parent.#name :n` atomically increments a nested counter.
+        if UpdateExpression.startswith("ADD "):
+            target, token = UpdateExpression[len("ADD "):].split()
+            parent, child = target.split(".", 1)
+            parent, child = resolve(parent), resolve(child)
+            if not isinstance(item.get(parent), dict):
+                raise ClientError(
+                    {"Error": {"Code": "ValidationException",
+                               "Message": "The document path provided in the update "
+                                          "expression is invalid for update"}},
+                    "UpdateItem",
+                )
+            item[parent][child] = item[parent].get(child, 0) + values[token]
+            return {}
 
         # `SET ... REMOVE a, b`: apply the removals, then run the SET logic on
         # the remainder.
