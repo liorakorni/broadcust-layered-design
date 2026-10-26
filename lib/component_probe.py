@@ -29,6 +29,9 @@ PIXEL_DELTA = 60
 #: Text and icons ink only part of their box, so this is low; a solid shape changes
 #: nearly all of it.
 MIN_CHANGED = 0.04
+#: An outline with no fill (a thin chevron, a ring) inks a hairline of its box: a
+#: one-pixel diagonal stroke measured 3.6% there. A baked copy of it changes ~0%.
+MIN_CHANGED_OUTLINE = 0.012
 #: Components are small relative to the page, so each box is padded to catch the
 #: edge of a shadow or an antialiased rim.
 PAD = 2
@@ -68,6 +71,11 @@ def probe(render_png, html, scene, canvas, *, only=None):
     """
     baseline = _load(render_png(html))
     records = []
+    hollow = {
+        shape["id"] for shape in scene.get("shapeLayers") or []
+        if not shape.get("color") and shape.get("borderColor")
+        and shape.get("kind") != "gradient"
+    }
     for layer_id, element_id, box, kind in components(scene):
         if only and layer_id not in only:
             continue
@@ -76,7 +84,8 @@ def probe(render_png, html, scene, canvas, *, only=None):
         records.append({
             "layerId": layer_id, "elementId": element_id, "kind": kind,
             "changed": None if changed is None else round(changed, 4),
-            "onlyCopy": changed is not None and changed >= MIN_CHANGED,
+            "onlyCopy": changed is not None and changed >= (
+                MIN_CHANGED_OUTLINE if layer_id in hollow else MIN_CHANGED),
         })
     return records
 

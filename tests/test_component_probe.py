@@ -81,3 +81,29 @@ def test_only_the_named_components_are_probed():
     records = component_probe.probe(
         fake_renderer(doc), "<div></div>", doc, CANVAS, only={"cta-pill"})
     assert [r["layerId"] for r in records] == ["cta-pill"]
+
+
+def test_a_hairline_outline_is_judged_by_its_own_ink_not_a_fill_s():
+    """Measured live: a 1px chevron outline changed 3.6% of its box when hidden - the
+    whole of its ink - and was reported as a baked-in duplicate."""
+    from lib import component_probe
+
+    scene = {
+        "canvas": {"width": 100, "height": 100}, "textLayers": [], "imageLayers": [],
+        "shapeLayers": [{"id": "chev", "kind": "chevron", "x": 10, "y": 10, "width": 60,
+                         "height": 60, "color": None, "borderColor": "#FFD526", "zIndex": 5}],
+    }
+    from PIL import Image
+
+    def render(html):
+        image = Image.new("RGB", (100, 100), (0, 0, 0))
+        if "visibility:hidden" not in html:
+            for i in range(12, 68):          # a diagonal hairline: ~56 of ~4,100 pixels
+                image.putpixel((i, i), (255, 213, 38))
+        out = io.BytesIO()
+        image.save(out, "PNG")
+        return out.getvalue()
+
+    records = component_probe.probe(render, "<div id='chev'></div>", scene, scene["canvas"])
+    assert records[0]["changed"] < component_probe.MIN_CHANGED
+    assert records[0]["onlyCopy"] is True
