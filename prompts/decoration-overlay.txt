@@ -15,6 +15,9 @@ KEEP, in their exact original positions and at their exact original size:
   the whole field on its side of that edge - the flat colour as well as the
   coloured ribbon along it, right into the corners it fills. Dropping the field
   and keeping only the ribbon leaves a hole nothing else fills.
+- Only a field with a definite edge is a panel. A dark area that thins out
+  gradually into the photograph is shading over the photograph, not artwork:
+  when the REMOVE list below names it, leave it out. The layout redraws it.
 
 REMOVE completely:
 - The entire photographic scene: sky, landscape, buildings, people, foliage,

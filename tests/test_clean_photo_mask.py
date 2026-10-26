@@ -345,6 +345,30 @@ def test_the_overlay_is_told_to_remove_each_component_the_layout_draws(pipeline)
     assert "Solid, dark or textured background surfaces" in prompt
 
 
+def test_the_overlay_is_told_that_shading_over_the_photograph_is_not_a_panel(pipeline):
+    """Measured: a concept whose copy sits on a dark area fading into the photograph
+    came back with that area as a solid black panel, which then (correctly) failed
+    validation twice. The shading is the layout's to draw, and the overlay says so."""
+    from tests.test_component_plan import decomposed
+
+    through(pipeline, Stage.EXTRACT_SCENE)
+    job_id = pipeline["jobId"]
+    document = decomposed()
+    document["effects"] = list(document.get("effects") or []) + [{
+        "id": "photo-darkening", "owner": "photo", "kind": "readabilityGradient",
+        "description": "Black darkening behind the right-hand copy, fading toward the athlete."}]
+    decompose(job_id, document)
+
+    run_stage(job_id, Stage.DECORATION_OVERLAY)
+
+    prompt = pipeline["calls"]["image"][-1]["prompt"]
+    removals = prompt.split("REMOVE completely")[1]
+    assert "soft dark shading over the photograph behind the copy" in removals
+    assert "fading toward the athlete" in removals
+    assert "not a panel" in removals
+    assert "Only a field with a definite edge is a panel" in prompt
+
+
 def decompose(job_id, doc=None):
     """Repoint the job's scene at a decomposed one, append-only.
 

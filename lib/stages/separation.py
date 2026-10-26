@@ -273,16 +273,24 @@ def _removal_block(job_id, job):
         return ""
     scene = artifacts.get_json(job_id, scene_ref["scene"])
     components = validate_assets.editable_component_boxes(scene)
-    if not components:
-        return ""
-    return prompts.bullet_list(
-        [
-            f"the {_describe(component)} at x={component['box']['x']}, "
-            f"y={component['box']['y']}, {component['box']['width']}x"
-            f"{component['box']['height']} px"
-            for component in components
-        ]
-    )
+    lines = [
+        f"the {_describe(component)} at x={component['box']['x']}, "
+        f"y={component['box']['y']}, {component['box']['width']}x"
+        f"{component['box']['height']} px"
+        for component in components
+    ]
+    # Shading the concept painted over the photograph is drawn by the layout from
+    # the first reconstruction (lib/readability.py). Left in the overlay it would
+    # be a second copy of it - and, being dark, it reads as a solid panel.
+    for effect in scene.get("effects") or []:
+        if effect.get("kind") == "readabilityGradient" and effect.get("owner") == "photo":
+            said = (effect.get("description") or "").strip().rstrip(".")
+            lines.append(
+                "the soft dark shading over the photograph behind the copy"
+                + (f" ({said})" if said else "")
+                + " - shading that fades into the photograph, not a panel"
+            )
+    return prompts.bullet_list(lines) if lines else ""
 
 
 def _describe(component):
