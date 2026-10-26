@@ -83,7 +83,7 @@ def rank_key(candidate):
         int(candidate.get("editabilityBlocking", 0)),
         1 if candidate.get("progressVerdict") == "D" else 0,
         # Unmeasured fidelity ranks after measured: an unknown is not a good result.
-        round(fidelity / FIDELITY_STEP) if fidelity is not None else 10 ** 6,
+        round(float(fidelity) / FIDELITY_STEP) if fidelity is not None else 10 ** 6,
         int(candidate.get("blockingCount", 0)),
         int(candidate.get("warningCount", 0)),
         int(candidate["attempt"]),

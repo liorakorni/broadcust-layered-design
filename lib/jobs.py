@@ -83,7 +83,7 @@ def claim_idempotency(owner_scope, request_id, request_hash):
     pk = f"IDEM#{owner_scope}#{request_id}"
     job_id = uuid.uuid4().hex
     try:
-        _tbl().put_item(
+        _put(
             Item={
                 "pk": pk,
                 "jobId": job_id,
@@ -116,7 +116,7 @@ def record_overlay_defect(job_id, description):
     Kept on the job rather than in S3 because it is transient state for the next
     repair, not an artifact of the design, and each repair supersedes the last.
     """
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET overlayDefect = :d, updatedAt = :now",
         ExpressionAttributeValues={":d": description or "", ":now": _now()},
@@ -125,7 +125,7 @@ def record_overlay_defect(job_id, description):
 
 def set_photo_repair(job_id, plan):
     """Remember the targeted photograph correction the next stage must apply."""
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET photoRepair = :p, updatedAt = :now",
         ExpressionAttributeValues={":p": plan, ":now": _now()},
@@ -160,7 +160,7 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
         review_strictness = review_policy.DEFAULT_STRICTNESS
     review_strictness = review_policy.validate_strictness(review_strictness)
 
-    _tbl().put_item(
+    _put(
         Item={
             "pk": f"JOB#{job_id}",
             "jobId": job_id,
@@ -223,7 +223,7 @@ def attach_execution(job_id, execution_arn):
     orphan a running job and start a second one.
     """
     try:
-        _tbl().update_item(
+        _update(
             Key={"pk": f"JOB#{job_id}"},
             UpdateExpression="SET executionArn = :arn, #s = :running, updatedAt = :now",
             ConditionExpression="attribute_not_exists(executionArn)",
@@ -241,6 +241,24 @@ def attach_execution(job_id, execution_arn):
         raise
 
 
+def plain(value):
+    """The inverse of `ddb_safe`: Decimals read back as int or float.
+
+    Arithmetic between a Decimal and a float raises, and DynamoDB returns every
+    number as a Decimal, so a stage that ranks on a stored ratio would fail on the
+    service and pass against any fake that returned what it was given.
+    """
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {key: plain(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [plain(inner) for inner in value]
+    return value
+
+
 def get_job(job_id, owner_scope):
     """Read a job, enforcing ownership.
 
@@ -252,7 +270,7 @@ def get_job(job_id, owner_scope):
         raise JobNotFound(f"Job {job_id} was not found.")
     if item.get("ownerScope") != owner_scope:
         raise JobNotFound(f"Job {job_id} was not found.")
-    return item
+    return plain(item)
 
 
 def get_job_unscoped(job_id):
@@ -264,11 +282,11 @@ def get_job_unscoped(job_id):
     item = _tbl().get_item(Key={"pk": f"JOB#{job_id}"}).get("Item")
     if not item:
         raise JobNotFound(f"Job {job_id} was not found.")
-    return item
+    return plain(item)
 
 
 def set_stage(job_id, stage):
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET stage = :s, #st = :running, updatedAt = :now",
         ExpressionAttributeNames={"#st": "status"},
@@ -280,9 +298,39 @@ def set_stage(job_id, stage):
     )
 
 
+def ddb_safe(value):
+    """The same data with every float as a Decimal, which is all DynamoDB accepts.
+
+    A measured ratio or a letter-spacing in a stage's record is a float, and boto3
+    refuses it with a TypeError that surfaces as an INTERNAL failure of that stage.
+    """
+    from decimal import Decimal
+
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {key: ddb_safe(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [ddb_safe(inner) for inner in value]
+    return value
+
+
+def _update(**kwargs):
+    """`update_item` with every float in the values turned into a Decimal."""
+    if "ExpressionAttributeValues" in kwargs:
+        kwargs["ExpressionAttributeValues"] = ddb_safe(kwargs["ExpressionAttributeValues"])
+    return _tbl().update_item(**kwargs)
+
+
+def _put(**kwargs):
+    if "Item" in kwargs:
+        kwargs["Item"] = ddb_safe(kwargs["Item"])
+    return _tbl().put_item(**kwargs)
+
+
 def record_artifacts(job_id, stage, attempt, artifacts):
     """Persist a stage's artifact pointers on the job record."""
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression=(
             "SET artifacts.#stage = :a, attempts.#stage = :attempt, updatedAt = :now"
@@ -305,7 +353,7 @@ def record_asset_item(job_id, attempt, entry):
     asset - which is how a contact icon reached ASSEMBLE with no delivered URL.
     Each asset is written under its own key in `assets` instead.
     """
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression=(
             "SET assets.#asset = :entry, attempts.#stage = :attempt, updatedAt = :now"
@@ -347,7 +395,7 @@ def record_warning(job_id, warning):
     """
     key = f"{warning['code']}:{warning.get('affected') or ''}"
     try:
-        _tbl().update_item(
+        _update(
             Key={"pk": f"JOB#{job_id}"},
             UpdateExpression="SET stageWarnings.#k = :w, updatedAt = :now",
             ExpressionAttributeNames={"#k": key},
@@ -358,7 +406,7 @@ def record_warning(job_id, warning):
         # now rather than failing over a warning.
         if exc.response.get("Error", {}).get("Code") != "ValidationException":
             raise
-        _tbl().update_item(
+        _update(
             Key={"pk": f"JOB#{job_id}"},
             UpdateExpression="SET stageWarnings = :m, updatedAt = :now",
             ExpressionAttributeValues={":m": {key: storable(warning)}, ":now": _now()},
@@ -386,7 +434,7 @@ def freeze_concept(job_id, approved):
     CONCEPT artifact, so both separation branches edit the same bytes even though
     the concept stage can now run again at a later attempt.
     """
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET approvedConcept = :c, updatedAt = :now",
         ExpressionAttributeValues={":c": approved, ":now": _now()},
@@ -405,7 +453,7 @@ def record_concept_candidate(job_id, attempt, record):
         if exc.response["Error"]["Code"] != "ValidationException":
             raise
         # A job created before candidates were tracked has no parent map.
-        _tbl().update_item(
+        _update(
             Key={"pk": f"JOB#{job_id}"},
             UpdateExpression="SET conceptCandidates = :m, updatedAt = :now",
             ExpressionAttributeValues={":m": {}, ":now": _now()},
@@ -414,7 +462,7 @@ def record_concept_candidate(job_id, attempt, record):
 
 
 def _write_candidate(job_id, attempt, record):
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET conceptCandidates.#a = :r, updatedAt = :now",
         ExpressionAttributeNames={"#a": str(int(attempt))},
@@ -430,7 +478,7 @@ def concept_candidates(job):
 
 def set_concept_correction(job_id, correction):
     """Point the next CONCEPT attempt at the correction plan it must follow."""
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET conceptCorrection = :c, updatedAt = :now",
         ExpressionAttributeValues={":c": correction, ":now": _now()},
@@ -448,20 +496,20 @@ def _nested_write(job_id, parent, expression, names, values):
     """
     key = {"pk": f"JOB#{job_id}"}
     try:
-        _tbl().update_item(
+        _update(
             Key=key, UpdateExpression=expression,
             ExpressionAttributeNames=names, ExpressionAttributeValues=values,
         )
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "ValidationException":
             raise
-        _tbl().update_item(
+        _update(
             Key=key,
             UpdateExpression="SET #parent = :empty, updatedAt = :now",
             ExpressionAttributeNames={"#parent": parent},
             ExpressionAttributeValues={":empty": {}, ":now": _now()},
         )
-        _tbl().update_item(
+        _update(
             Key=key, UpdateExpression=expression,
             ExpressionAttributeNames=names, ExpressionAttributeValues=values,
         )
@@ -481,7 +529,7 @@ def set_design_state(job_id, pointer, expected_version=None):
     if expected_version is not None:
         values[":expected"] = int(expected_version)
     try:
-        _tbl().update_item(
+        _update(
             Key={"pk": f"JOB#{job_id}"},
             UpdateExpression="SET designState = :p, designVersion = :v, updatedAt = :now",
             ExpressionAttributeValues=values,
@@ -509,7 +557,7 @@ def design_candidates(job):
 
 def select_design(job_id, selected):
     """Record which candidate the job will deliver, and why."""
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET selectedDesign = :s, updatedAt = :now",
         ExpressionAttributeValues={":s": selected, ":now": _now()},
@@ -518,7 +566,7 @@ def select_design(job_id, selected):
 
 def set_working_scene(job_id, pointer):
     """Name the scene the next ASSEMBLE must build from (a repaired one)."""
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET workingScene = :w, updatedAt = :now",
         ExpressionAttributeValues={":w": pointer, ":now": _now()},
@@ -531,7 +579,7 @@ def record_diagnostics(job_id, diagnostics):
     A raised error's details do not survive the hop through Step Functions (only
     the message does), so the full diagnostic is stored on the job as well.
     """
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET repairDiagnostics = :d, updatedAt = :now",
         ExpressionAttributeValues={":d": diagnostics, ":now": _now()},
@@ -605,7 +653,7 @@ def bump_counter(job_id, field, limit):
     section 4 is explicit that repairs are bounded per job.
     """
     try:
-        result = _tbl().update_item(
+        result = _update(
             Key={"pk": f"JOB#{job_id}"},
             UpdateExpression=f"SET {field} = {field} + :one, updatedAt = :now",
             ConditionExpression=f"{field} < :limit",
@@ -655,7 +703,7 @@ def mark_succeeded(job_id, result_key, html_hash, manifest_hash, *,
     if outcome:
         expression += ", outcome = :outcome"
         values[":outcome"] = outcome
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression=expression + " REMOVE expiresAt",
         ExpressionAttributeNames=names,
@@ -665,7 +713,7 @@ def mark_succeeded(job_id, result_key, html_hash, manifest_hash, *,
 
 def mark_failed(job_id, error):
     """Terminal failure carrying the standard error shape."""
-    _tbl().update_item(
+    _update(
         Key={"pk": f"JOB#{job_id}"},
         UpdateExpression="SET #s = :failed, #e = :err, stage = :stage, updatedAt = :now",
         ExpressionAttributeNames={"#s": "status", "#e": "error"},

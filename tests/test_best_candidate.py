@@ -292,3 +292,13 @@ def test_missing_mandatory_text_is_disclosed_and_blocks_publication(script):
     assert first["code"] == "MANDATORY_CONTENT_MISSING" and first["severity"] == "blocking"
     assert "must not be published" in first["message"]
     assert result["html"]                         # returned for manual editing
+
+
+def test_ranking_reads_a_stored_fidelity_the_way_dynamodb_returns_it():
+    """DynamoDB returns every number as a Decimal; dividing one by a float raises.
+    The fake used to hand back what it was given, so this reached the live service."""
+    from decimal import Decimal
+
+    ranked = candidates.ranked([candidate(1, fidelity=Decimal("0.08")),
+                                candidate(2, fidelity=Decimal("0.02"))])
+    assert [c["attempt"] for c in ranked] == [2, 1]

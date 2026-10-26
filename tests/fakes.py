@@ -19,11 +19,28 @@ def _conditional_failure(op):
     )
 
 
+def _reject_floats(value, where):
+    """DynamoDB refuses a Python float; boto3 raises TypeError on the real service.
+
+    Without this the fake accepts them, and a stage that records a measured ratio
+    passes every test and then fails in ASSEMBLE on the first live run.
+    """
+    if isinstance(value, float):
+        raise TypeError(f"Float types are not supported. Use Decimal types instead. ({where})")
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            _reject_floats(inner, f"{where}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, inner in enumerate(value):
+            _reject_floats(inner, f"{where}[{index}]")
+
+
 class FakeTable:
     def __init__(self):
         self.items = {}
 
     def put_item(self, Item, ConditionExpression=None):
+        _reject_floats(Item, "Item")
         key = Item["pk"]
         if ConditionExpression == "attribute_not_exists(pk)" and key in self.items:
             raise _conditional_failure("PutItem")
@@ -43,6 +60,7 @@ class FakeTable:
         ConditionExpression=None,
         ReturnValues=None,
     ):
+        _reject_floats(ExpressionAttributeValues or {}, "values")
         item = self.items.setdefault(Key["pk"], {"pk": Key["pk"]})
         names = ExpressionAttributeNames or {}
         values = ExpressionAttributeValues or {}
