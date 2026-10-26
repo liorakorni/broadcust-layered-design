@@ -24,7 +24,9 @@ Content is not negotiated: wording always comes from the approved copy manifest
 
 from __future__ import annotations
 
-from lib import scene_patch
+import re
+
+from lib import schemas, scene_patch
 from lib.dependencies import digest
 
 TARGETS = ("content", "typography", "layout", "asset", "concept")
@@ -121,6 +123,169 @@ def _route_content(record, issue, ids, ctx):
     return record
 
 
+def _undrawn_effect(scene, kind):
+    """A declared effect of this kind that no shape draws, if there is one."""
+    drawn = {s.get("effect") for s in scene.get("shapeLayers") or []}
+    for effect in scene.get("effects") or []:
+        if effect["kind"] == kind and effect["id"] not in drawn:
+            return effect
+    return None
+
+
+def _as_shape_addition(issue, ids, scene, record):
+    """Read a correction aimed at an undrawn effect as a request to draw it.
+
+    Measured on a live run: the design declared a readability gradient as baked
+    into the photograph, the separated layers did not contain it, and the review
+    asked for `angle` and `gradientStrength` on the effect's id. That id is not a
+    layer, so the whole finding was unroutable and a design that needed one CSS
+    gradient failed. The effect nobody draws is exactly the case the layout can
+    take over, so the request is translated into the addShape it should have been
+    - deterministically, from the direction the correction asked for.
+    """
+    drawn = {s.get("effect") for s in scene.get("shapeLayers") or []}
+    layers = {l["id"] for l in (scene.get("shapeLayers") or [])
+              + (scene.get("textLayers") or []) + (scene.get("imageLayers") or [])}
+    orphans = {
+        e["id"]: e for e in scene.get("effects") or []
+        if e["id"] not in drawn and e["id"] not in layers
+        and e["kind"] in schemas.SINGLETON_EFFECTS
+    }
+    if any(c.get("property") == "addShape" for c in issue.get("constraints") or []):
+        return issue, ids          # the review named a preset itself; leave it be
+    # "add:<effect>" is how the review asks for something that does not exist, so
+    # the prefix is not part of the id it means.
+    asked = [i[4:] if str(i).startswith("add:") else i for i in map(str, ids)]
+    named = [i for i in asked if i in orphans]
+    shading = _about_shading(issue)
+    if shading and len(asked) == 1 and not named and not _effect_of_kind(
+            scene, "readabilityGradient"):
+        # Measured live: the review asked for a darkening by a name of its own
+        # choosing on a design that declares none. There is nothing to take over,
+        # so the layout adds it under the name the review used.
+        return _shape_addition_for(
+            issue, {"id": asked[0], "kind": "readabilityGradient", "owner": "none"},
+            scene, record, take_over=False)
+    unnamed_shading = not ids and shading
+    if unnamed_shading and len(orphans) == 1:
+        # A finding that names nothing is normally unroutable, and stays that way.
+        # The exception, measured live: the review reported the readability
+        # shading as missing, in words, with no element named - there was nothing
+        # to name, because the thing it wanted does not exist yet. One undrawn
+        # effect and a finding about that effect leave one reading.
+        named = list(orphans)
+    elif unnamed_shading and not _effect_of_kind(scene, "readabilityGradient"):
+        # Also measured live: the same complaint about a design that declares no
+        # darkening at all, drawn or baked. Then there is nothing to take over and
+        # the answer is a new one - the first case the review prompt documents.
+        effect = {"id": "readabilityGradient", "kind": "readabilityGradient",
+                  "owner": "none"}
+        return _shape_addition_for(issue, effect, scene, record, take_over=False)
+    elif len(named) != 1 or len(asked) != 1:
+        return issue, ids
+
+    effect = orphans[named[0]]
+    return _shape_addition_for(issue, effect, scene, record, take_over=True)
+
+
+def _effect_of_kind(scene, kind):
+    return any(e["kind"] == kind for e in scene.get("effects") or [])
+
+
+def _shape_addition_for(issue, effect, scene, record, *, take_over):
+    """The addShape correction that draws `effect`, or the issue left as it was.
+
+    Returns the pair `_route_properties` works on, so a translation that cannot
+    be applied changes nothing and the finding stays unroutable.
+    """
+    ids = list(issue.get("affectedElementIds") or [])
+    constraints = list(issue.get("constraints") or [])
+    edge = _edge_of(constraints, issue.get("region"), _text_edge(scene))
+    preset = f"{'gradient' if effect['kind'] == 'readabilityGradient' else 'panel'}-{edge}"
+    if preset not in scene_patch.SHAPE_PRESETS:
+        return issue, ids
+    try:
+        scene_patch.add_shape(scene, preset, effect_id=effect["id"],
+                              take_over=take_over)
+    except Exception:          # no stacking slot, shapes switched off: leave it
+        return issue, ids
+    translated = dict(
+        issue,
+        constraints=[{"elementId": f"add:{effect['id']}", "property": "addShape",
+                      "value": preset, "takeOver": take_over}],
+    )
+    record["translated"] = {
+        "from": [{k: c.get(k) for k in ("elementId", "property", "value")}
+                 for c in constraints],
+        "to": preset,
+        "reason": (
+            f"effect {effect['id']!r} is declared as owned by the "
+            f"{effect['owner']} and no shape draws it, so the layout takes it over"
+            if take_over else
+            "the design declares no readabilityGradient at all, so the layout "
+            "adds the one the finding asks for"
+        ),
+    }
+    return translated, [f"add:{effect['id']}"]
+
+
+#: A finding is about the shading only if it says so. Checked on the finding's
+#: own words, because the alternative - routing an unnamed layout finding to the
+#: one effect nobody draws - would answer unrelated complaints with a gradient.
+_SHADING_WORDS = re.compile(
+    r"gradient|shading|scrim|darken|readab|legib", re.IGNORECASE)
+
+
+def _about_shading(issue):
+    return bool(_SHADING_WORDS.search(" ".join(
+        str(issue.get(field) or "") for field in
+        ("code", "message", "affected", "impact", "suggestion"))))
+
+
+def _text_edge(scene):
+    """The edge a readability gradient belongs on: the side the words sit on.
+
+    Read from the scene's own geometry rather than the finding's prose, so an
+    unnamed correction still darkens the half that carries the text.
+    """
+    texts = scene.get("textLayers") or []
+    area = sum(t["width"] * t["height"] for t in texts)
+    if not area:
+        return "bottom"
+    weighted = lambda f: sum(f(t) * t["width"] * t["height"] for t in texts) / area
+    x = weighted(lambda t: t["x"] + t["width"] / 2) / scene["canvas"]["width"]
+    y = weighted(lambda t: t["y"] + t["height"] / 2) / scene["canvas"]["height"]
+    if x <= 0.4:
+        return "left"
+    if x >= 0.6:
+        return "right"
+    return "bottom" if y >= 0.5 else "top"
+
+
+def _edge_of(constraints, region, default="bottom"):
+    """Which edge a gradient correction is about: what it asked for, or where it is."""
+    angles = {"0": "top", "90": "left", "180": "bottom", "270": "right"}
+    for constraint in constraints:
+        if constraint.get("property") == "angle":
+            edge = angles.get(str(constraint.get("value", "")).strip())
+            if edge:
+                return edge
+    if region:
+        x = float(region.get("x", 0) or 0)
+        width = float(region.get("width", 0) or 0)
+        y = float(region.get("y", 0) or 0)
+        height = float(region.get("height", 0) or 0)
+        if x >= 0.5:
+            return "right"
+        if x + width <= 0.5:
+            return "left"
+        if y >= 0.5:
+            return "bottom"
+        if y + height <= 0.5:
+            return "top"
+    return default
+
+
 def _key_for_layer(scene, layer_id):
     for layer in scene["textLayers"]:
         if layer["id"] == layer_id:
@@ -130,6 +295,8 @@ def _key_for_layer(scene, layer_id):
 
 def _route_properties(record, issue, ids, ctx, target):
     scene = ctx["scene"]
+    if target == "layout":
+        issue, ids = _as_shape_addition(issue, ids, scene, record)
     if issue.get("rerender"):
         # A mechanical check that did not run (not one that failed): the repair is
         # to assemble and render again. Nothing in the design changes.
@@ -156,12 +323,24 @@ def _route_properties(record, issue, ids, ctx, target):
                 f"{c.get('value')!r} is not a shape preset ({', '.join(scene_patch.SHAPE_PRESETS)})"
             )
             continue
+        # The review looked at the rendered design and found the effect absent.
+        # When the scene says an asset owns it and no shape draws it, the layout
+        # takes that effect over instead of declaring a second one - whatever id
+        # the review chose for it. A shape already drawing it is still refused.
+        orphan = _undrawn_effect(scene, preset[1])
+        effect_id = element[4:] or None
+        take_over = bool(c.get("takeOver")) or orphan is not None
+        if orphan is not None:
+            effect_id = orphan["id"]
         try:
-            scene_patch.add_shape(scene, c["value"], effect_id=element[4:] or None)
+            scene_patch.add_shape(scene, c["value"], effect_id=effect_id,
+                                  take_over=take_over)
         except Exception as exc:  # InvalidScene: ownership or stacking refuses it
             record["problems"].append(str(exc))
             continue
-        shapes_to_add.append({"preset": c["value"], "effect": element[4:] or preset[1]})
+        shapes_to_add.append({"preset": c["value"],
+                              "effect": effect_id or preset[1],
+                              "takeOver": take_over})
     if shapes_to_add and not record["problems"] and not constraints and not ids:
         record["patch"] = {"addShapes": shapes_to_add, "target": target}
         record["route"] = ROUTE_LIGHT

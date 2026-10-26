@@ -175,7 +175,7 @@ def _asset_keys(job):
             "background": produced[Stage.CLEAN_PHOTO]["background"],
             "decoration": produced[Stage.DECORATION_OVERLAY]["decoration"],
         }
-    for entry in produced.get(Stage.INDEPENDENT_ASSETS, {}).get("items", []):
+    for entry in jobs.asset_items(job):
         keys[entry["assetId"]] = entry["key"]
     return keys
 

@@ -77,15 +77,13 @@ expensive. Provide:
   ELEMENTS above (content keys for a content issue).
 - requiresImageGeneration: true ONLY for "asset" and "concept"; false otherwise.
 - constraints: for typography and layout, the exact correction PER ELEMENT as
-  {elementId, property, value} entries. value is always a string. Properties:
-    typography: fontFamily, fontWeight, fontSize, lineHeight, letterSpacing,
-      align, direction, color, fill ("solid" or "transparent"), strokeColor,
-      strokeWidth (px), wrap, overflow
-    layout: x, y, width, height, zIndex (and opacity, radius, angle, color,
-      borderColor, borderWidth, rotation for shapes; objectFit for images).
-      A gradient too faint or too short is fixed with gradientStrength (0-1,
-      the opacity of its darkest end, e.g. "0.95") and width/height - never
-      with a CSS string; colours are always #RRGGBB.
+  {elementId, property, value} entries. value is always a string. These are the
+  ONLY properties that exist; anything else is rejected, not approximated.
+  Colours are always #RRGGBB.
+    typography:
+      {typography_properties}
+    layout:
+      {layout_properties}
   Example - a headline whose white outline is missing:
     repairTarget "typography", affectedElementIds ["primary-title"],
     constraints [{elementId:"primary-title", property:"strokeColor", value:"#FFFFFF"},
@@ -97,8 +95,16 @@ expensive. Provide:
     affectedElementIds ["add:readabilityGradient"],
     constraints [{elementId:"add:readabilityGradient", property:"addShape",
                   value:"gradient-bottom"}]   (presets: gradient-bottom,
-    gradient-top, gradient-left, gradient-right, panel-bottom, panel-top). Never add one when EFFECT OWNERS
-  above already lists a readabilityGradient, whoever owns it.
+    gradient-top, gradient-left, gradient-right, panel-bottom, panel-top).
+  If EFFECT OWNERS lists a readabilityGradient owned by the photo or the overlay
+  and the darkening is genuinely absent from the design in front of you, ask for
+  it the same way, with that effect's own id: affectedElementIds
+  ["<effectId>"] is wrong - an effect id is not a layer and no property can be
+  set on it. Use add:<effectId> with a preset, and the layout takes the effect
+  over. Never ask for one when a shape already draws it.
+  Every typography and layout finding must name what it concerns in
+  affectedElementIds - a layer id, or add:<effectId> for something that is
+  missing. A finding that describes the fault only in words cannot be applied.
   Constrain only the elements that are actually wrong: a subtitle that is
   correct stays out of affectedElementIds and constraints. Use [] for content,
   asset and concept issues.

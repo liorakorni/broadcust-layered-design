@@ -24,7 +24,14 @@ import boto3
 from botocore.exceptions import ClientError
 
 import conf
-from lib.errors import AssetInvalid, IdempotencyConflict, JobNotFound, Status, Unauthorized
+from lib.errors import (
+    AssetInvalid,
+    IdempotencyConflict,
+    JobNotFound,
+    Stage,
+    Status,
+    Unauthorized,
+)
 
 #: Failed and in-flight jobs expire after this. A SUCCEEDED job is a saved design
 #: and has its expiry removed by `mark_succeeded`.
@@ -174,6 +181,11 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
             # Seeded for the same reason as the maps above: a nested write to a
             # missing parent is rejected.
             "conceptCandidates": {},
+            # One entry per independent asset, written by the Map's own
+            # invocations (see record_asset_item). Same reason for seeding it.
+            "assets": {},
+            # Non-blocking findings recorded by stages (see record_warning).
+            "stageWarnings": {},
             # Design state (lib/design_state.py). `designVersion` is the optimistic
             # concurrency counter for edits; the maps below must exist up front for
             # the same reason as the ones above.
@@ -273,6 +285,88 @@ def record_artifacts(job_id, stage, attempt, artifacts):
             ":now": _now(),
         },
     )
+
+
+def record_asset_item(job_id, attempt, entry):
+    """Add one independent asset to the job, without disturbing its siblings.
+
+    The workflow produces these in a Map at concurrency two, so two invocations
+    can be recording at the same moment. Writing the stage's whole pointer the
+    way `record_artifacts` does would let the later write drop the earlier
+    asset - which is how a contact icon reached ASSEMBLE with no delivered URL.
+    Each asset is written under its own key in `assets` instead.
+    """
+    _tbl().update_item(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression=(
+            "SET assets.#asset = :entry, attempts.#stage = :attempt, updatedAt = :now"
+        ),
+        ExpressionAttributeNames={
+            "#asset": entry["assetId"], "#stage": Stage.INDEPENDENT_ASSETS},
+        ExpressionAttributeValues={
+            ":entry": storable(entry), ":attempt": attempt, ":now": _now(),
+        },
+    )
+    return entry
+
+
+def storable(value):
+    """The same data with no Python floats in it.
+
+    DynamoDB has no float type and rejects the whole write when it meets one, so
+    a measurement a stage wants to keep (an alpha fraction, say) would fail the
+    stage rather than be recorded. Numbers come back as `Decimal`, which
+    lib/artifacts.py already serialises as plain numbers.
+    """
+    from decimal import Decimal
+
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {k: storable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [storable(v) for v in value]
+    return value
+
+
+def record_warning(job_id, warning):
+    """Keep a non-blocking finding a stage made, for the final result to report.
+
+    Stages other than the reviews can find something worth saying - a component
+    the repair could not separate, say. Keyed by code and subject so a stage that
+    runs again does not report the same thing twice.
+    """
+    key = f"{warning['code']}:{warning.get('affected') or ''}"
+    try:
+        _tbl().update_item(
+            Key={"pk": f"JOB#{job_id}"},
+            UpdateExpression="SET stageWarnings.#k = :w, updatedAt = :now",
+            ExpressionAttributeNames={"#k": key},
+            ExpressionAttributeValues={":w": storable(warning), ":now": _now()},
+        )
+    except ClientError as exc:
+        # The map is seeded at creation; a job created before it existed gets it
+        # now rather than failing over a warning.
+        if exc.response.get("Error", {}).get("Code") != "ValidationException":
+            raise
+        _tbl().update_item(
+            Key={"pk": f"JOB#{job_id}"},
+            UpdateExpression="SET stageWarnings = :m, updatedAt = :now",
+            ExpressionAttributeValues={":m": {key: storable(warning)}, ":now": _now()},
+        )
+    return warning
+
+
+def stage_warnings(job):
+    """Non-blocking findings recorded by stages, oldest key order."""
+    recorded = job.get("stageWarnings") or {}
+    return [recorded[key] for key in sorted(recorded)]
+
+
+def asset_items(job):
+    """Every independent asset recorded for this job, as a list of entries."""
+    assets = job.get("assets") or {}
+    return [assets[asset_id] for asset_id in sorted(assets)]
 
 
 def freeze_concept(job_id, approved):

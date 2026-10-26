@@ -150,6 +150,13 @@ class FakeS3:
         self.objects = {}
         # Key -> "k=v&k2=v2", as S3 reports it. A write replaces the tag set.
         self.tags = {}
+        #: Keys (or key prefixes) the reader is not allowed to read. Real S3
+        #: answers 403 rather than 404 for a caller without s3:ListBucket, which
+        #: is how a missing grant can masquerade as a missing object.
+        self.denied = set()
+
+    def deny(self, key):
+        self.denied.add(key)
 
     def put_object(
         self, Bucket, Key, Body, ContentType=None, IfNoneMatch=None, Tagging=None
@@ -173,9 +180,17 @@ class FakeS3:
         return {}
 
     def get_object(self, Bucket, Key):
+        if any(Key.startswith(prefix) for prefix in self.denied):
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"},
+                 "ResponseMetadata": {"HTTPStatusCode": 403}},
+                "GetObject",
+            )
         if Key not in self.objects:
             raise ClientError(
-                {"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject"
+                {"Error": {"Code": "NoSuchKey", "Message": "missing"},
+                 "ResponseMetadata": {"HTTPStatusCode": 404}},
+                "GetObject",
             )
 
         class Body:

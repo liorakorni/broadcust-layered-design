@@ -48,10 +48,82 @@ IMAGE LAYERS:
 - image: any independent inset photo, product or subject that needs separate
   placement.
 
+SIMPLE SHAPES (shapeLayers + effects):
+Simple geometry is drawn by code so the customer can restyle it. Report EVERY
+one you can see, with the box it occupies in the image:
+- the filled background behind a call to action (kind "panel", radius equal to
+  its visible corner rounding; a pill-shaped button has a radius of about half
+  its height),
+- the solid circle behind each contact pictogram (kind "circle"),
+- plain panels, bands and dividers (kind "panel"),
+- a dark or light gradient used to make text readable (kind "gradient", with
+  stops ordered from position 0 to position 1),
+- thin outlines and rings (kind "ring" or "border", with borderColor and
+  borderWidth).
+Rules:
+- colour values are "#RRGGBB" only. Never a CSS string, a gradient expression or
+  a colour name. Sample the colour from the middle of the shape.
+- what each kind must carry, or it is rejected:
+  "panel", "circle" and "dot" need "color";
+  "gradient" needs two to four "stops" (never five), in ascending position;
+  "ring", "border" and "chevron" need "borderColor" and a "borderWidth" of 1 to
+  48 - a chevron also needs a "rotation" of 0, 45, 90, 135, 180, 225, 270 or
+  315 (45 points down, 135 left, 225 up, 315 right).
+- report a shape you cannot describe within those limits - a four-colour
+  gradient band, a filled arrow, a soft glow - as part of the decoration layer
+  instead, with no shape layer. A shape reported wrongly fails the job; one left
+  in the decoration layer costs only its editability.
+- the field the text sits on must be owned by something. A flat colour area
+  behind the copy is a "panel" shape; a darkening that fades across the
+  composition is a "gradient" shape; a part of the photograph that simply is
+  dark stays with the photograph and gets no shape. A large colour field that no
+  shape, no effect and no retained raster claims is taken out of the photograph
+  by the separation and then drawn by nothing.
+- count repeated motifs and list every instance: three chevrons are three shape
+  layers, four dots are four. An instance you leave out is removed from the
+  photograph and never drawn again.
+- a shape's zIndex sits above the artwork it replaces and below the text it
+  backs.
+- give every shape an "effect" id, and add one entry to "effects" with the same
+  id, the matching kind and owner "layout". A gradient already painted into the
+  photograph is reported as an effect with owner "photo" and NO shape layer.
+- values that do not apply to the kind are null (color for a gradient,
+  borderColor for a panel) or 0.
+- leave genuinely complex artwork alone: illustrations, textures, hand-drawn
+  flourishes and anything you could not reproduce with one rectangle, circle,
+  ring or linear gradient stay part of the decoration layer.
+
+CONTACT PICTOGRAMS:
+Each phone, email, location or website pictogram is its own image layer:
+- type "image", assetId "icon-phone", "icon-email", "icon-location" or
+  "icon-website", the box of the pictogram itself (not the circle around it),
+  zIndex above its circle.
+- the circle behind it is a separate shapeLayer, and the phone number or address
+  is a separate text layer. Three independent elements per contact line.
+
+COMPONENTS ("components" - the decomposition plan):
+Classify EVERY element of the composition exactly once, so nothing is left
+unaccounted for:
+- "photo" for the background photograph,
+- "editableText" for each text layer,
+- "editableShape" for each shapeLayer,
+- "rasterIcon" for each pictogram image layer,
+- "retainedRaster" for the decoration layer and any artwork deliberately left in
+  it, with a note saying what it contains.
+Set "pairsWith" to the id of the text layer an element belongs to: the panel
+behind a call to action pairs with the call-to-action text, and a contact
+circle and its pictogram both pair with that contact's text layer. Use
+"retainedRaster" with pairsWith set only when a button or contact badge truly
+cannot be separated, and say why in the note.
+
 OVERLAY SAMPLES:
 - Report up to 8 regions where the decoration overlay MUST be transparent
   (kind "transparent") because the photograph shows through there.
 - Report up to 8 regions where it MUST be opaque (kind "opaque") because a solid
-  graphic panel sits there.
+  graphic panel sits there - a border, a frame or a colour field that stays in
+  the decoration layer. Never sample a shape you listed in shapeLayers: the
+  layout draws those, so the overlay is empty there.
 - These are used to verify the separation, so choose clearly representative
   areas well inside each region rather than on a boundary.
+
+{correction_block}

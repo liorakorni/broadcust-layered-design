@@ -88,7 +88,18 @@ def _covered_layers(scene):
     for layer in scene.get("textLayers") or []:
         yield layer
     for layer in scene.get("imageLayers") or []:
+        # Independent imagery, including each contact pictogram, is placed as its
+        # own layer on top, so its original copy has to go.
         if layer.get("type") == "image":
+            yield layer
+    for layer in scene.get("shapeLayers") or []:
+        # An opaque simple shape - a CTA panel, a contact circle - is drawn in
+        # CSS, so the photograph underneath it must be reconstructed; otherwise
+        # moving the CSS panel reveals the baked one. A readability gradient is
+        # deliberately excluded: it is translucent, the photograph is meant to
+        # show through it, and repainting that much of the frame is what lets the
+        # model re-compose the picture.
+        if layer.get("kind") != "gradient":
             yield layer
 
 

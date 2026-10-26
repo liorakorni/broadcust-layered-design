@@ -14,13 +14,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 
 import boto3
 from botocore.exceptions import ClientError
 
 import conf
-from lib.errors import AssetInvalid, LayeredDesignError, Stage
+from lib.errors import (
+    ArtifactAccessDenied, ArtifactNotFound, AssetInvalid, LayeredDesignError, Stage,
+)
+
+log = logging.getLogger("layered-design.artifacts")
 
 ROOT_PREFIX = "layered-design"
 
@@ -112,13 +117,37 @@ def put_bytes(key, data, content_type, *, overwrite=False):
 
 
 def get_bytes(job_id, key):
-    """Read an artifact belonging to `job_id`."""
+    """Read an artifact belonging to `job_id`.
+
+    Absent and forbidden are different failures and are reported as different
+    classes. S3 only answers NoSuchKey to a caller allowed to list the bucket;
+    without that permission a missing key comes back as AccessDenied, so treating
+    403 as "not there" turns a missing grant into a silent fallback.
+    """
     safe = job_key(job_id, key)
     try:
         response = _client().get_object(Bucket=conf.ARTIFACT_BUCKET, Key=safe)
     except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
-            raise AssetInvalid(f"Artifact not found: {safe}") from exc
+        code = exc.response.get("Error", {}).get("Code", "")
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        # The bucket and key are ours and safe to log; nothing else from the
+        # response is, so the raw error never reaches the message.
+        if code in ("NoSuchKey", "404") or status == 404:
+            log.info("artifact absent bucket=%s key=%s", conf.ARTIFACT_BUCKET, safe)
+            raise ArtifactNotFound(f"Artifact not found: {safe}") from exc
+        if code in ("AccessDenied", "403") or status == 403:
+            log.warning(
+                "artifact read denied bucket=%s key=%s s3Code=%s",
+                conf.ARTIFACT_BUCKET, safe, code,
+            )
+            raise ArtifactAccessDenied(
+                f"Access denied reading {safe} from {conf.ARTIFACT_BUCKET}. This is "
+                "a permission fault, not a missing artifact."
+            ) from exc
+        log.warning(
+            "artifact read failed bucket=%s key=%s s3Code=%s",
+            conf.ARTIFACT_BUCKET, safe, code,
+        )
         raise
     return response["Body"].read()
 
@@ -159,6 +188,20 @@ def get_json(job_id, key):
         return json.loads(get_bytes(job_id, key).decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise AssetInvalid(f"Artifact at {key} is not valid JSON.") from exc
+
+
+def get_json_optional(job_id, key):
+    """`get_json`, or None when the object is genuinely absent.
+
+    Only for artifacts that are optional by contract - a probe for a record a
+    retried invocation may have written. A denied read, a malformed document and
+    every other failure propagate, so a missing permission cannot be mistaken for
+    a missing file.
+    """
+    try:
+        return get_json(job_id, key)
+    except ArtifactNotFound:
+        return None
 
 
 def canonical_manifest_hash(entries):

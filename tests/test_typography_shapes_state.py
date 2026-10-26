@@ -179,6 +179,124 @@ def test_the_gradient_sits_between_the_photo_and_everything_above_it():
     assert all(z < layer["zIndex"] for layer in added["textLayers"])
 
 
+# --- the editor contract for shapes -------------------------------------------
+#
+# A shape is a layer the customer can select and restyle, so it is emitted in the
+# editor's own structure (`.words` with an empty `.text`) rather than in a private
+# one. `data-role="decoration"` is what exempts it from the copy checks, and
+# nothing else is exempt.
+
+
+CTA_PANEL = {
+    "id": "cta_background", "type": "shape", "kind": "panel", "effect": "ctaBackground",
+    "x": 80, "y": 840, "width": 360, "height": 96, "zIndex": 9,
+    "color": "#FFD43B", "opacity": 0.9, "radius": 48, "angle": 180, "stops": [],
+    "borderColor": None, "borderWidth": 0.0, "rotation": 0,
+}
+
+
+def with_panel():
+    doc = scene()
+    doc["shapeLayers"] = [copy.deepcopy(CTA_PANEL)]
+    doc["effects"] = [{"id": "ctaBackground", "kind": "ctaBackground",
+                       "owner": "layout", "note": None}]
+    return doc
+
+
+def test_a_shape_is_emitted_as_an_empty_words_decoration_under_box():
+    html = html_of(parse(with_panel()).model_dump(mode="json"))
+    block = (
+        '      <div class="words d3001" id="cta-background" data-role="decoration" '
+        'data-shape="panel" data-effect="ctaBackground" '
+        "style=\"position:absolute;left:80px;top:840px;width:360px;height:96px;"
+        'box-sizing:border-box;opacity:0.9;background-color:#FFD43B;'
+        'border-radius:48px;z-index:9;">\n'
+        '        <div class="text"></div>\n'
+        "      </div>"
+    )
+    assert block in html
+    # A direct child of .box, like every other layer: no wrapper to select through.
+    assert '\n      <div class="words d3001"' in html.split('class="box"', 1)[1]
+    assert 'class="shape' not in html
+
+
+def test_shape_and_text_classes_and_ids_are_unique():
+    import re
+
+    doc = with_panel()
+    doc["shapeLayers"].append({**copy.deepcopy(CTA_PANEL), "id": "cta background",
+                               "effect": "ctaBackground", "zIndex": 8})
+    html = html_of(parse(doc).model_dump(mode="json"))
+
+    ids = re.findall(r'id="([^"]+)"', html)
+    classes = re.findall(r'class="words (d\d+)', html)
+    assert len(ids) == len(set(ids))
+    assert len(classes) == len(set(classes))
+    # Shapes are numbered from 3001, text from 1001, so the two never collide.
+    assert sorted(classes) == ["d1001", "d1002", "d1003", "d3001", "d3002"]
+    # Two scene ids that sanitise to the same slug still get distinct element ids.
+    assert {"cta-background", "cta-background-2"} <= set(ids)
+
+
+def test_a_shape_element_id_is_stable_when_another_layer_is_added():
+    """Derived from the scene id, so an editor's saved reference survives."""
+    one = with_panel()
+    two = with_panel()
+    two["shapeLayers"].insert(0, {**copy.deepcopy(GRADIENT), "zIndex": 1})
+    two["effects"].append({"id": "g1", "kind": "readabilityGradient",
+                           "owner": "layout", "note": None})
+
+    assert assemble_html.shape_element_ids(one)["cta_background"] == "cta-background"
+    assert assemble_html.shape_element_ids(two)["cta_background"] == "cta-background"
+
+
+def test_only_decorations_are_exempt_from_empty_text_and_fitting():
+    from lib import render as renderer
+
+    source = _inspect_source()
+    # The copy checks and the fit are scoped to layers that are not decorations.
+    assert renderer._FIT_SCRIPT.count('.words:not([data-role="decoration"])') == 1
+    assert source.count('.words:not([data-role="decoration"])') == 2   # checks, count
+    # Nothing else is exempt, and position is checked for every layer.
+    assert "'.words, .badges, .background'" in source
+    assert "EMPTY_TEXT" in source and "OUT_OF_BOUNDS" in source
+    assert assemble_html.DECORATION_ROLE not in schemas.ALLOWED_ROLES
+
+
+def _inspect_source():
+    import inspect
+
+    from lib import render as renderer
+
+    return inspect.getsource(renderer._inspect)
+
+
+def test_the_layer_map_includes_shapes_and_their_html_ids():
+    from lib.stages.review import _layer_map
+
+    doc = parse(with_panel()).model_dump(mode="json")
+    entries = {layer["id"]: layer for layer in _layer_map(doc)}
+
+    shape = entries["cta_background"]
+    assert shape["kind"] == "shape" and shape["shape"] == "panel"
+    assert shape["effect"] == "ctaBackground"
+    assert shape["box"] == {"x": 80, "y": 840, "width": 360, "height": 96}
+    # Every entry says which element it is, so a caller can act on the HTML.
+    html = html_of(doc)
+    for layer in entries.values():
+        assert f'id="{layer["elementId"]}"' in html
+    assert entries["t_title"]["elementId"] == "text-1001"
+    assert shape["elementId"] == "cta-background"
+
+
+def test_a_scene_without_shapes_assembles_byte_identically():
+    """The contract for the existing shape-free designs is unchanged."""
+    plain = scene()
+    assert "shapeLayers" not in plain
+    assert html_of(parse(plain).model_dump(mode="json")) == html_of(plain)
+    assert "data-role=\"decoration\"" not in html_of(plain)
+
+
 # --- dependencies: what a change invalidates -----------------------------------
 
 

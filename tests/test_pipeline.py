@@ -240,7 +240,7 @@ def copy_checks(items=COPY_ITEMS, *, missing=(), wrong=(), unreadable=()):
 
 def concept_verdict(prompt=None, *, passed=None, issues=(), conflict=None,
                     mode="strict-adherence", checks=None, copy=None,
-                    missing_copy=()):
+                    missing_copy=(), direction_ok=True):
     """A well-formed concept_review_v2 payload.
 
     `passed` is accepted so older call sites keep reading naturally, but v2 has no
@@ -254,6 +254,7 @@ def concept_verdict(prompt=None, *, passed=None, issues=(), conflict=None,
         "issues": list(issues),
         "suggestions": [],
         "constraintConflict": {"conflicted": bool(conflict), "reason": conflict},
+        "compositionDirectionOk": direction_ok,
     }
 
 

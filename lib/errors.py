@@ -66,6 +66,18 @@ class Stage:
 
     ALL = (ACCEPT_REQUEST,) + PIPELINE + (DESIGN_STATE, REPAIR)
 
+    #: Workflow operations that run inside a stage rather than being one. They
+    #: are what a caller needs to know to tell a text repair's failure from the
+    #: review that routed it, so a failure records both.
+    OPERATIONS = (
+        "REPAIR_LIGHT",
+        "REPAIR_ASSET",
+        "REPAIR_PHOTO",
+        "REPAIR_OVERLAY",
+        "REBUILD_PHOTO",
+        "EXPORT_DESIGN",
+    )
+
 
 class Status:
     """Job statuses. SPEC section 2.4 allows exactly these four."""
@@ -107,6 +119,8 @@ class Code:
     INVALID_SCENE = "INVALID_SCENE"
     INVALID_TRANSPARENCY = "INVALID_TRANSPARENCY"
     ASSET_INVALID = "ASSET_INVALID"
+    ARTIFACT_NOT_FOUND = "ARTIFACT_NOT_FOUND"
+    ARTIFACT_ACCESS_DENIED = "ARTIFACT_ACCESS_DENIED"
     REFERENCE_FETCH_FAILED = "REFERENCE_FETCH_FAILED"
     REFERENCE_ADHERENCE_FAILED = "REFERENCE_ADHERENCE_FAILED"
     REFERENCE_CONSTRAINT_CONFLICT = "REFERENCE_CONSTRAINT_CONFLICT"
@@ -318,6 +332,31 @@ class AssetInvalid(LayeredDesignError):
     stage = Stage.VALIDATE_ASSETS
     code = Code.ASSET_INVALID
     category = "asset-validation"
+
+
+class ArtifactNotFound(AssetInvalid):
+    """The object is genuinely absent: S3 answered NoSuchKey.
+
+    A subclass of AssetInvalid so the places that already treat an unreadable
+    artifact as a bad asset keep working, with a code that says which of the two
+    reasons it was. Only this class may be read as "it is not there".
+    """
+
+    code = Code.ARTIFACT_NOT_FOUND
+
+
+class ArtifactAccessDenied(LayeredDesignError):
+    """S3 refused the read. The object may well exist.
+
+    Deliberately NOT an AssetInvalid: a missing permission is an operational
+    fault, and a handler that falls back on an absent optional artifact must not
+    swallow it. S3 answers a GetObject for a key the caller cannot list with 403
+    rather than 404, so without this distinction a missing grant looks exactly
+    like a missing file.
+    """
+
+    code = Code.ARTIFACT_ACCESS_DENIED
+    category = "technical"
 
 
 class ReferenceFetchFailed(LayeredDesignError):

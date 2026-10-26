@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import conf
 from lib import (
-    artifacts, jobs, prompts, reference, reference_policy, review_policy, schemas,
+    artifacts, direction_policy, jobs, prompts, reference, reference_policy,
+    review_policy, schemas,
 )
 from lib.errors import InvalidModelJson, Stage
 from lib.providers import vision
@@ -130,13 +131,18 @@ def run(job_id, attempt, asset_id=None):
     jobs.set_stage(job_id, Stage.ANALYZE_REFERENCE)
     request = artifacts.get_json(job_id, job["requestKey"])
 
-    policy = reference_policy.derive_reference_policy(
-        request.get("designFreedom", 0),
-        request.get("reviewStrictness", review_policy.DEFAULT_STRICTNESS),
-    )
     copy_key = job["artifacts"][Stage.PREPARE_COPY]["copy"]
     copy_items = artifacts.get_json(job_id, copy_key)["items"]
     canvas = request["canvas"]
+
+    # Resolved before the reference is even analysed, so the analysis, the
+    # concept and its review all work to the same direction.
+    direction = direction_policy.resolve(request, copy_items)
+    policy = reference_policy.derive_reference_policy(
+        request.get("designFreedom", 0),
+        request.get("reviewStrictness", review_policy.DEFAULT_STRICTNESS),
+        direction,
+    )
 
     # Real reference pixels, not a description of them.
     inspiration = reference.fetch(request["referenceImageUrl"])
@@ -151,6 +157,7 @@ def run(job_id, attempt, asset_id=None):
         must_preserve=prompts.bullet_list(policy["mustPreserve"]),
         content_boundary=prompts.bullet_list(policy["contentBoundary"]),
         copy_block=prompts.copy_block(copy_items),
+        direction_block=direction_policy.prompt_block(direction),
     )
     raw = vision.analyze(
         prompt,
@@ -178,4 +185,9 @@ def run(job_id, attempt, asset_id=None):
     )
     pointers = {"policy": policy_stored["key"], "analysis": analysis_stored["key"]}
     jobs.record_artifacts(job_id, Stage.ANALYZE_REFERENCE, attempt, pointers)
-    return {**pointers, "mode": policy["mode"], "designFreedom": policy["designFreedom"]}
+    return {
+        **pointers,
+        "mode": policy["mode"],
+        "designFreedom": policy["designFreedom"],
+        "direction": direction,
+    }

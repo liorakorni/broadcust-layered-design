@@ -151,6 +151,17 @@ resources:
                 - Effect: Allow
                   Action: s3:GetObject
                   Resource: !Sub '${ArtifactBucket.Arn}/layered-design/*'
+                # Without ListBucket, S3 answers a GetObject for a key that is not
+                # there with 403 instead of 404, so an optional artifact that is
+                # simply absent looks like a permission fault. Granted on the
+                # bucket ARN, which is the only resource s3:ListBucket accepts, and
+                # with no s3:prefix condition: that key is not supplied by the
+                # implicit list check behind a GetObject, so a conditioned grant
+                # would still 403. Reads themselves stay scoped by the GetObject
+                # statement above.
+                - Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !GetAtt ArtifactBucket.Arn
                 # The API persists the canonical request so every stage reads
                 # identical bytes regardless of retries. That is the only thing
                 # it writes, so the grant is scoped to that one stage prefix
@@ -214,6 +225,14 @@ resources:
                     - s3:PutObject
                     - s3:PutObjectTagging
                   Resource: !Sub '${ArtifactBucket.Arn}/layered-design/*'
+                # REPAIR_LIGHT probes for the record a retried invocation may have
+                # written. Without ListBucket that probe came back AccessDenied
+                # rather than NoSuchKey and failed the job (see docs/REPAIR_ROUTING.md).
+                # Bucket ARN and no s3:prefix condition, for the reason given on the
+                # API role's copy of this statement.
+                - Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !GetAtt ArtifactBucket.Arn
                 - Effect: Allow
                   Action:
                     - dynamodb:GetItem

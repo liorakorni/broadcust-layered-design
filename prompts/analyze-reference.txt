@@ -52,4 +52,6 @@ Rules:
 - Do not copy the reference's text, business name or contact details into your
   answer except where needed to identify an element.
 
+{direction_block}
+
 Return strict JSON matching the schema.

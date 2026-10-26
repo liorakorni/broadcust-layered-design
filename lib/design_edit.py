@@ -145,7 +145,15 @@ def update(payload, owner_scope):
     scene = design_state.scene_of(base)
     patched = apply_changes(scene, changes)
     if patched == scene:
-        return _result(base, pointer["key"], changed=False, idempotent=False, previous=base)
+        # Reported, never passed off as applied: no new version, `changed` false,
+        # and the fields that had no effect named so a client can say why. The
+        # editor autosaves, so an edit that re-sends the current values is a
+        # normal event rather than an error - unlike a repair, where a patch that
+        # changes nothing means the defect is still there (RepairNoProgress).
+        out = _result(base, pointer["key"], changed=False, idempotent=False, previous=base)
+        out["noOp"] = True
+        out["noOpFields"] = _no_op_fields(scene, changes)
+        return out
 
     derived = design_state.derive(
         base, scene=patched, reason="user-edit", attempt=base["attempt"], version=current + 1,
@@ -161,6 +169,22 @@ def update(payload, owner_scope):
         error.details = {"expectedVersion": expected}
         raise error
     return _result(derived, key, changed=True, idempotent=False, previous=base, scene_before=scene)
+
+
+def _no_op_fields(scene, changes):
+    """Which requested fields already held the value the edit asked for."""
+    fields = []
+    texts = {l["contentKey"]: l.get("text") for l in scene["textLayers"]}
+    for content_key, text in (changes.get("content") or {}).items():
+        if texts.get(content_key) == text:
+            fields.append(f"content.{content_key}")
+    for target in ("typography", "layout"):
+        for layer_id, properties in (changes.get(target) or {}).items():
+            _, layer = scene_patch.layer_kind(scene, layer_id)
+            for name, value in (properties or {}).items():
+                if layer is not None and str(layer.get(name)) == str(value):
+                    fields.append(f"{target}.{layer_id}.{name}")
+    return sorted(fields)
 
 
 def _result(snapshot, key, *, changed, idempotent, previous, scene_before=None):

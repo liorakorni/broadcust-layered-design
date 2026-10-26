@@ -30,8 +30,10 @@ from tests.test_overlay_validation_regression import (
     inverted_overlay,
     window_overlay,
 )
+from tests import test_pipeline as base
 from tests.test_pipeline import (  # noqa: F401  (fixtures are used by pytest)
     fake_overlay,
+    fake_photo,
     pipeline,
     png_bytes,
     run_stage,
@@ -113,6 +115,42 @@ def test_text_boxes_and_independent_insets_are_repainted_even_over_the_photo():
     # ...and the inset layer is repainted too.
     _, alpha, _ = mask_alpha()
     assert region_alpha(alpha, (950, 610, 1010, 670)) == (0, 0)
+
+
+def test_the_clean_photo_mask_covers_shape_and_icon_boxes():
+    """A CSS panel over a baked one is the duplicate the customer cannot move."""
+    scene = {
+        **SCENE,
+        "shapeLayers": [
+            {"id": "s_panel", "kind": "panel", "x": 700, "y": 200,
+             "width": 150, "height": 90},
+        ],
+        "imageLayers": [*SCENE["imageLayers"],
+                        {"type": "image", "id": "i_phone", "x": 120, "y": 940,
+                         "width": 40, "height": 40}],
+    }
+    _, alpha, _ = mask_alpha(scene)
+    assert region_alpha(alpha, (710, 210, 840, 280)) == (0, 0)      # the panel
+    assert region_alpha(alpha, (125, 945, 155, 975)) == (0, 0)      # the pictogram
+
+
+def test_a_readability_gradient_is_not_repainted_into_the_photograph():
+    """It is translucent: the photograph is meant to show through it, and
+    repainting that much of the frame is what let the model re-compose it."""
+    scene = {
+        **SCENE,
+        "shapeLayers": [
+            {"id": "s_fade", "kind": "gradient", "x": 0, "y": 540,
+             "width": 1080, "height": 540},
+        ],
+    }
+    _, alpha, fraction = mask_alpha(scene)
+    _, _, without = mask_alpha()
+    assert fraction == without
+    for index in (1, 2, 4):
+        s = SAMPLES[index]
+        box = (s["x"], s["y"], s["x"] + s["width"], s["y"] + s["height"])
+        assert region_alpha(alpha, box)[0] == 255
 
 
 def test_artwork_is_grown_so_a_soft_edge_is_not_left_behind():
@@ -241,7 +279,7 @@ def test_the_repair_starts_from_the_concept_and_carries_the_full_rules(
     assert seen["data"] == concept, "a repair must not edit the rejected overlay"
     assert seen["kwargs"]["transparent"] is True
     # Every rule about what to keep still applies, plus what went wrong.
-    assert "Icon badges" in seen["prompt"]
+    assert "Decorative panels, ribbons, banners and framing shapes" in seen["prompt"]
     assert "Solid, dark or textured background surfaces" in seen["prompt"]
     assert "the two white contact badges are missing" in seen["prompt"]
     assert "CORRECTION" in seen["prompt"]
@@ -275,13 +313,226 @@ def test_a_repair_rebuilds_the_photo_around_the_repaired_overlay(
     run_stage(job_id, Stage.VALIDATE_ASSETS)
 
 
-def test_the_first_overlay_prompt_keeps_badges_and_non_photographic_panels(pipeline):
-    """Measured on the stored concept: without these two rules the overlay kept
-    both contact badges 1 time in 4; with them 4 of 4 kept badges and the panel.
-    A prompt that says only "icons" lets the model drop a white disc as 'text'."""
+def test_the_first_overlay_prompt_keeps_non_photographic_panels(pipeline):
+    """Measured on the stored concept: without this rule the overlay dropped the
+    design's dark textured panel as "photography" and the composition collapsed.
+    A graphic surface with a grain is artwork, whatever it looks like."""
     through(pipeline, Stage.EXTRACT_SCENE)
     run_stage(pipeline["jobId"], Stage.DECORATION_OVERLAY)
     prompt = pipeline["calls"]["image"][-1]["prompt"]
-    assert "Icon badges" in prompt and "never the badge" in prompt
     assert "Solid, dark or textured background surfaces" in prompt
     assert "fully opaque, edge to edge" in prompt
+    assert "Illustrations, hand-drawn marks, patterns" in prompt
+    # No plan on this scene, so nothing is listed for removal.
+    assert "rebuilt as editable layers" in prompt
+    assert "x=" not in prompt.split("REMOVE completely")[1]
+
+
+def test_the_overlay_is_told_to_remove_each_component_the_layout_draws(pipeline):
+    """The duplicate defect starts here: a CTA background kept in the artwork."""
+    through(pipeline, Stage.EXTRACT_SCENE)
+    job_id = pipeline["jobId"]
+    decompose(job_id)
+
+    run_stage(job_id, Stage.DECORATION_OVERLAY)
+
+    prompt = pipeline["calls"]["image"][-1]["prompt"]
+    removals = prompt.split("REMOVE completely")[1]
+    assert "panel #1E6F5C at x=100, y=700, 400x120 px" in removals
+    assert "circle #FFD43B at x=80, y=900, 64x64 px" in removals
+    assert "pictogram (the symbol itself, not the circle behind it) at x=96" in removals
+    # And it still keeps what it is not told to remove.
+    assert "Solid, dark or textured background surfaces" in prompt
+
+
+def decompose(job_id, doc=None):
+    """Repoint the job's scene at a decomposed one, append-only.
+
+    The fixture scene predates the decomposition plan, which is itself worth
+    keeping: both shapes must work.
+    """
+    from tests.test_component_plan import decomposed
+
+    document = doc or decomposed()
+    key = artifacts.artifact_key(job_id, Stage.EXTRACT_SCENE, 1, "scene-decomposed.json")
+    stored = artifacts.put_json(key, document)
+    jobs.record_artifacts(job_id, Stage.EXTRACT_SCENE, 1, {"scene": stored["key"]})
+    return document
+
+
+def test_the_fidelity_prompt_names_the_code_drawn_components(pipeline):
+    """Otherwise every extracted CTA background is reported as a missing panel,
+    and the design goes round the overlay repair restoring what is now code."""
+    through(pipeline, Stage.CLEAN_PHOTO)
+    job_id = pipeline["jobId"]
+    decompose(job_id)
+
+    run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    prompt = next(c["prompt"] for c in reversed(pipeline["calls"]["vision"])
+                  if c["schema"] == "composite_fidelity_v1")
+    assert "DRAWN BY THE LAYOUT, intentionally absent" in prompt
+    assert "a panel at x=100, y=700 (400x120 px), colour" in prompt
+    assert "a pictogram placed as its own layer" in prompt
+    assert "never set displaced" in prompt
+    # The code-owned shading rule is untouched.
+    assert "missingShading" in prompt
+
+
+def test_a_scene_without_a_plan_leaves_the_fidelity_prompt_as_it_was(pipeline):
+    through(pipeline, Stage.CLEAN_PHOTO)
+    run_stage(pipeline["jobId"], Stage.VALIDATE_ASSETS)
+    prompt = next(c["prompt"] for c in reversed(pipeline["calls"]["vision"])
+                  if c["schema"] == "composite_fidelity_v1")
+    assert "DRAWN BY THE LAYOUT" not in prompt
+
+
+# --- when the repair cannot separate it -----------------------------------------
+
+#: Where fake_overlay() is opaque, so a shape placed here is "still in the artwork".
+IN_THE_ARTWORK = {"x": 200, "y": 200, "width": 120, "height": 120}
+
+
+def scene_with(shape, component):
+    from tests.test_component_plan import decomposed
+
+    doc = decomposed()
+    doc["shapeLayers"].append(shape)
+    doc["effects"].append(
+        {"id": shape["effect"], "kind": "chevrons", "owner": "layout", "note": None})
+    doc["components"].append(component)
+    return doc
+
+
+def exhausted(pipeline, doc):
+    through(pipeline, Stage.CLEAN_PHOTO)
+    job_id = pipeline["jobId"]
+    decompose(job_id, doc)
+    for _ in range(2):                               # the repair budget is spent
+        jobs.bump_counter(job_id, "overlayRepairs", 2)
+    return job_id
+
+
+def test_a_duplicate_the_repair_could_not_remove_is_cleared_in_code(pipeline):
+    """Measured on a live run: the overlay kept the chevrons, the circles and the
+    button after every repair. Clearing the component's own box is arithmetic, and
+    the photograph under it has already been repainted, so the design is the one
+    that was intended instead of a failure."""
+    chevron = {"id": "s_chevron", "type": "shape", "kind": "chevron",
+               "effect": "e_chevron", "zIndex": 7, "color": None, "opacity": 1.0,
+               "radius": 0, "angle": 180, "stops": [], "borderColor": "#FFD43B",
+               "borderWidth": 6.0, "rotation": 45, **IN_THE_ARTWORK}
+    job_id = exhausted(pipeline, scene_with(
+        chevron,
+        {"id": "c_chevron", "kind": "editableShape", "layerId": "s_chevron",
+         "pairsWith": None, "note": None}))
+    before = jobs.get_job_unscoped(job_id)["artifacts"][
+        Stage.DECORATION_OVERLAY]["decoration"]
+
+    run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    job = jobs.get_job_unscoped(job_id)
+    overlay = job["artifacts"][Stage.DECORATION_OVERLAY]
+    assert overlay["decoration"] != before
+    assert overlay["clearedInCode"] == ["s_chevron"]
+    assert job["metrics"]["overlayAreasClearedInCode"] == 1
+    # The box is genuinely transparent now, and the shape is still the layout's.
+    cleared, _ = va.load_rgba(artifacts.get_bytes(job_id, overlay["decoration"]))
+    box = (IN_THE_ARTWORK["x"], IN_THE_ARTWORK["y"],
+           IN_THE_ARTWORK["x"] + IN_THE_ARTWORK["width"],
+           IN_THE_ARTWORK["y"] + IN_THE_ARTWORK["height"])
+    assert cleared.crop(box).getchannel("A").getextrema() == (0, 0)
+    assert not job.get("workingScene"), "nothing was given back to the artwork"
+    # And the first overlay is still readable: artifacts are never replaced.
+    assert artifacts.get_bytes(job_id, before)
+
+
+def test_a_readability_gradient_left_in_the_overlay_is_given_back_to_it(pipeline):
+    """A gradient's box covers much of the canvas, so clearing it would take real
+    artwork with it. It stays in the overlay, which becomes its declared owner."""
+    gradient = {"id": "s_fade", "type": "shape", "kind": "gradient",
+                "effect": "e_fade", "zIndex": 7, "color": None, "opacity": 1.0,
+                "radius": 0, "angle": 180,
+                "stops": [{"color": "#000000", "opacity": 0.8, "position": 0.0},
+                          {"color": "#000000", "opacity": 0.0, "position": 1.0}],
+                "borderColor": None, "borderWidth": 0.0, "rotation": 0,
+                "x": 100, "y": 100, "width": 400, "height": 400}
+    doc = scene_with(
+        gradient,
+        {"id": "c_fade", "kind": "editableShape", "layerId": "s_fade",
+         "pairsWith": None, "note": None})
+    doc["effects"][-1]["kind"] = "readabilityGradient"
+    job_id = exhausted(pipeline, doc)
+
+    run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    job = jobs.get_job_unscoped(job_id)
+    scene = artifacts.get_json(job_id, job["workingScene"]["key"])
+    assert "s_fade" not in [s["id"] for s in scene["shapeLayers"]]
+    assert next(e for e in scene["effects"] if e["id"] == "e_fade")["owner"] == "overlay"
+    warning = next(w for w in jobs.stage_warnings(job)
+                   if w["code"] == "COMPONENT_LEFT_RASTERIZED")
+    assert warning["affected"] == "s_fade"
+
+
+def test_a_see_through_region_the_overlay_keeps_painting_is_given_back(pipeline):
+    """Measured on a live run: the layout owned the readability gradient, the
+    overlay went on painting it, and a region declared see-through came back 14%
+    transparent after both paid overlay repairs. The gradient goes back to the
+    overlay, and the sample that contradicts the new ownership goes with it."""
+    gradient = {"id": "s_fade", "type": "shape", "kind": "gradient",
+                "effect": "e_fade", "zIndex": 7, "color": None, "opacity": 1.0,
+                "radius": 0, "angle": 180,
+                "stops": [{"color": "#000000", "opacity": 0.8, "position": 0.0},
+                          {"color": "#000000", "opacity": 0.0, "position": 1.0}],
+                "borderColor": None, "borderWidth": 0.0, "rotation": 0,
+                "x": 150, "y": 150, "width": 300, "height": 300}
+    doc = scene_with(
+        gradient,
+        {"id": "c_fade", "kind": "editableShape", "layerId": "s_fade",
+         "pairsWith": None, "note": None})
+    doc["effects"][-1]["kind"] = "readabilityGradient"
+    doc["overlaySamples"].append({"kind": "transparent", **IN_THE_ARTWORK})
+    job_id = exhausted(pipeline, doc)
+
+    run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    job = jobs.get_job_unscoped(job_id)
+    scene = artifacts.get_json(job_id, job["workingScene"]["key"])
+    assert "s_fade" not in [s["id"] for s in scene["shapeLayers"]]
+    assert next(e for e in scene["effects"] if e["id"] == "e_fade")["owner"] == "overlay"
+    assert IN_THE_ARTWORK not in [
+        {k: s[k] for k in ("x", "y", "width", "height")}
+        for s in scene["overlaySamples"] if s["kind"] == "transparent"
+    ]
+    # Every other sample is still verified; only the surrendered area is gone.
+    assert len(scene["overlaySamples"]) == len(doc["overlaySamples"]) - 1
+
+
+def test_a_cta_background_still_in_the_photograph_fails(pipeline, monkeypatch):
+    """The acceptance list is not negotiable, and code cannot repaint a
+    photograph: a button still in the picture is missing editability."""
+    from tests.test_component_plan import decomposed
+    from PIL import ImageDraw
+
+    doc = decomposed()
+    panel = next(s for s in doc["shapeLayers"] if s["id"] == "s_cta_panel")
+
+    def painted():
+        image = Image.open(io.BytesIO(fake_photo())).convert("RGB")
+        ImageDraw.Draw(image).rectangle(
+            (panel["x"], panel["y"], panel["x"] + panel["width"],
+             panel["y"] + panel["height"]), fill=panel["color"])
+        return png_bytes(image)
+
+    monkeypatch.setattr(base, "fake_photo", painted)
+    job_id = exhausted(pipeline, doc)
+
+    with pytest.raises(InvalidTransparency) as raised:
+        run_stage(job_id, Stage.VALIDATE_ASSETS)
+
+    assert "s_cta_panel" in raised.value.message
+    assert "repair was attempted" in raised.value.message
+    job = jobs.get_job_unscoped(job_id)
+    assert not job.get("workingScene")
+    assert "componentsLeftRasterized" not in job["metrics"]

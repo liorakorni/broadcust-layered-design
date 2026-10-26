@@ -10,6 +10,7 @@ while producing nothing is far more expensive to diagnose than one that fails.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -65,6 +66,39 @@ _REPAIR_OPERATIONS = {
 }
 
 
+@contextlib.contextmanager
+def _attributed(operation, stage, job_id, attempt, started):
+    """Make a failure inside a workflow operation name that operation.
+
+    Only an exception's class name and message survive the hop to Step Functions,
+    so an operation that fails has to write its own identity into the message or
+    RecordFailure has nothing to go on and reports the job's last state. That is
+    how an S3 permission fault inside REPAIR_LIGHT was recorded as FINALIZE.
+
+    An unexpected exception is converted here as well as in the pipeline branch:
+    it used to escape as a raw boto or Python error, which carries neither the
+    stage nor a code.
+    """
+    try:
+        yield
+    except LayeredDesignError as exc:
+        if operation not in exc.message:
+            exc.message = f"{exc.message} [{operation} in {stage}]"
+            exc.args = (exc.message,)
+        _log(job_id, operation, attempt, started, error=exc.code)
+        raise
+    except Exception:
+        # The message may carry a provider or AWS payload, so it is logged and
+        # not surfaced. The operation and stage are our own constants.
+        log.exception("operation failed jobId=%s operation=%s", job_id, operation)
+        _log(job_id, operation, attempt, started, error=Code.INTERNAL)
+        raise LayeredDesignError(
+            f"Internal error in {operation} [{operation} in {stage}].",
+            stage=stage,
+            code=Code.INTERNAL,
+        )
+
+
 def handler(event, context):
     started = time.monotonic()
     job_id = event.get("jobId")
@@ -84,8 +118,9 @@ def handler(event, context):
     if event.get("operation") == "REPAIR_OVERLAY":
         from lib.stages import separation
 
-        artifacts = separation.repair_overlay(job_id=job_id, attempt=attempt)
-        _log(job_id, Stage.DECORATION_OVERLAY, attempt, started)
+        with _attributed("REPAIR_OVERLAY", Stage.DECORATION_OVERLAY, job_id, attempt, started):
+            artifacts = separation.repair_overlay(job_id=job_id, attempt=attempt)
+        _log(job_id, "REPAIR_OVERLAY", attempt, started)
         return {"ok": True, "stage": Stage.DECORATION_OVERLAY, "artifacts": artifacts}
 
     # The photo is rebuilt after an overlay repair because its mask is the
@@ -93,10 +128,11 @@ def handler(event, context):
     if event.get("operation") == "REBUILD_PHOTO":
         from lib.stages import separation
 
-        artifacts = separation.clean_photo(
-            job_id=job_id, attempt=attempt, after_repair=True
-        )
-        _log(job_id, Stage.CLEAN_PHOTO, attempt, started)
+        with _attributed("REBUILD_PHOTO", Stage.CLEAN_PHOTO, job_id, attempt, started):
+            artifacts = separation.clean_photo(
+                job_id=job_id, attempt=attempt, after_repair=True
+            )
+        _log(job_id, "REBUILD_PHOTO", attempt, started)
         return {"ok": True, "stage": Stage.CLEAN_PHOTO, "artifacts": artifacts}
 
     # Targeted repairs (lib/stages/repair.py). REPAIR_LIGHT never calls an image
@@ -106,15 +142,8 @@ def handler(event, context):
         from importlib import import_module
 
         target = getattr(import_module(f"lib.stages.{module}"), function)
-        try:
+        with _attributed(event["operation"], stage_name, job_id, attempt, started):
             artifacts = target(job_id=job_id, attempt=attempt)
-        except LayeredDesignError as exc:
-            # The stage travels in the message so RecordFailure reports it.
-            if stage_name not in exc.message:
-                exc.message = f"{exc.message} [{stage_name}]"
-                exc.args = (exc.message,)
-            _log(job_id, event["operation"], attempt, started, error=exc.code)
-            raise
         # Timed under the operation's own name, so REPAIR_LIGHT is not counted as
         # REVIEW time: a text-only repair's cost must be separable from a review's.
         _log(job_id, event["operation"], attempt, started)
@@ -127,10 +156,11 @@ def handler(event, context):
         from lib.stages import export_design
 
         conf.validate(conf.STAGE_REQUIRED)
-        out = export_design.export(
-            job_id, version=event.get("version"), owner_scope=event.get("ownerScope")
-        )
-        _log(job_id, Stage.DESIGN_STATE, attempt, started)
+        with _attributed("EXPORT_DESIGN", Stage.DESIGN_STATE, job_id, attempt, started):
+            out = export_design.export(
+                job_id, version=event.get("version"), owner_scope=event.get("ownerScope")
+            )
+        _log(job_id, "EXPORT_DESIGN", attempt, started)
         return {"ok": True, "stage": Stage.DESIGN_STATE, "artifacts": out}
 
     if event.get("operation") == "CORRECT":
@@ -245,12 +275,23 @@ def _record_failure(job_id, failure):
             error["category"] = raised.category
         if message:
             error["message"] = message
-        stage = _stage_from_message(message)
+        stage, operation = _stage_from_message(message)
         if stage:
             error["stage"] = stage
+        if operation:
+            # Additive beside `stage`: the pipeline stage says where in the
+            # pipeline, the operation says which bounded piece of work it was.
+            error["operation"] = operation
 
     jobs.mark_failed(job_id, error)
-    log.info(json.dumps({"jobId": job_id, "recordedFailure": error["code"]}))
+    log.info(
+        json.dumps({
+            "jobId": job_id,
+            "recordedFailure": error["code"],
+            "stage": error["stage"],
+            "operation": error.get("operation"),
+        })
+    )
     return {"ok": True, "stage": Stage.FINALIZE, "artifacts": {"error": error["code"]}}
 
 
@@ -283,12 +324,18 @@ def _error_classes():
 
 
 def _stage_from_message(message):
-    # Longest name first: CONCEPT is a substring of REVIEW_CONCEPT, so scanning in
-    # pipeline order would record every REVIEW_CONCEPT failure against CONCEPT.
-    for stage in sorted(Stage.PIPELINE, key=len, reverse=True):
-        if stage in message:
-            return stage
-    return None
+    """`(stage, operation)` recovered from a tagged message; either may be None.
+
+    Longest name first: CONCEPT is a substring of REVIEW_CONCEPT, so scanning in
+    pipeline order would record every REVIEW_CONCEPT failure against CONCEPT.
+    """
+    stage = next(
+        (s for s in sorted(Stage.PIPELINE, key=len, reverse=True) if s in message), None
+    )
+    operation = next(
+        (o for o in sorted(Stage.OPERATIONS, key=len, reverse=True) if o in message), None
+    )
+    return stage, operation
 
 
 def _record_timing(job_id, stage, started):

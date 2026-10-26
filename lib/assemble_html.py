@@ -16,6 +16,7 @@ contain. A scene is model output, and a model that emits
 from __future__ import annotations
 
 import html
+import re
 
 from lib.errors import AssemblyFailed
 
@@ -63,26 +64,81 @@ def _backing_layers(scene, assets, canvas):
     ordered = sorted(scene["imageLayers"], key=lambda item: (item["zIndex"], item["id"]))
     for layer, html_block in zip(ordered, images):
         tagged.append((layer["zIndex"], 0, layer["id"], html_block))
+    element_ids_by_layer = shape_element_ids(scene)
     for number, shape in shape_numbers(scene):
-        tagged.append((shape["zIndex"], 1, shape["id"], _shape(number, shape)))
+        tagged.append(
+            (shape["zIndex"], 1, shape["id"],
+             _shape(number, shape, element_ids_by_layer[shape["id"]]))
+        )
     tagged.sort(key=lambda item: (item[0], item[1], item[2]))
     return [item[3] for item in tagged]
 
 
+#: `data-role` marking an element the editor must treat as a decoration rather
+#: than as copy: no text of its own, exempt from the empty-text and text-fitting
+#: checks. It is deliberately not in `ALLOWED_ROLES`, so no text layer can claim
+#: it and nothing editable can be hidden behind the exemption.
+DECORATION_ROLE = "decoration"
+
+#: Shape classes are numbered from here. Text starts at d1001, so the two
+#: sequences cannot collide however many layers a design grows.
+SHAPE_NUMBER_BASE = 3001
+
+
 def shape_numbers(scene):
-    """Pair each shape layer with the number its element id is built from."""
+    """Pair each shape layer with the number its class is built from."""
     return enumerate(
         sorted(scene.get("shapeLayers") or [], key=lambda item: (item["zIndex"], item["id"])),
-        start=1,
+        start=SHAPE_NUMBER_BASE,
     )
 
 
 def shape_element_ids(scene):
-    return {shape["id"]: f"shape-{number}" for number, shape in shape_numbers(scene)}
+    """Map each shape layer id to the HTML id it is emitted with.
+
+    Derived from the scene id rather than from the ordering, so a saved editor
+    reference survives another layer being added above it - unlike text, whose
+    ids are positional for historical reasons. Collisions with text, imagery or
+    another sanitised shape id get a numeric suffix, because a duplicate id
+    makes two elements impossible to tell apart in the editor.
+    """
+    taken = set(element_ids(scene).values()) | set(image_element_ids(scene).values())
+    out = {}
+    for _, shape in shape_numbers(scene):
+        slug = re.sub(r"[^a-z0-9]+", "-", str(shape["id"]).lower()).strip("-")
+        base = slug if slug[:1].isalpha() else f"shape-{slug}".rstrip("-")
+        element = base
+        suffix = 2
+        while element in taken:
+            element = f"{base}-{suffix}"
+            suffix += 1
+        taken.add(element)
+        out[shape["id"]] = element
+    return out
 
 
-def _shape(number, shape):
-    """One code-owned element. Only allowlisted properties, each sanitised."""
+def element_style(document, element_id):
+    """The style attribute of one element, or None when it is not there.
+
+    Used to check that a repair actually reached the CSS: the scene is only the
+    input to assembly, so a property the assembler does not read would change the
+    document and nothing the renderer or an editor sees.
+    """
+    match = re.search(
+        rf'id="{re.escape(element_id)}"[^>]*?style="([^"]*)"', document
+    )
+    return match.group(1) if match else None
+
+
+def _shape(number, shape, element_id):
+    """One code-owned element, in the editor's own layer structure.
+
+    A shape is emitted as `.words` with an empty `.text` child and
+    `data-role="decoration"`, not as a class of its own: that is the structure
+    the editor can select, move, resize and restyle. `data-shape` and
+    `data-effect` say what it is, so assembly, validation and a later repair all
+    recognise it. Only allowlisted properties, each sanitised.
+    """
     kind = _enum(shape["kind"], ("panel", "gradient", "circle", "dot", "ring", "border", "chevron"))
     style = [
         "position:absolute",
@@ -125,9 +181,29 @@ def _shape(number, shape):
     style.append(f"z-index:{_z(shape)}")
 
     return (
-        f'<div class="shape s{number}" id="shape-{number}" data-shape="{_attr(kind)}" '
-        f'data-effect="{_attr(shape["effect"])}" style="{";".join(style)};"></div>'
+        f'<div class="words d{number}" id="{_attr(element_id)}" '
+        f'data-role="{DECORATION_ROLE}" data-shape="{_attr(kind)}" '
+        f'data-effect="{_attr(shape["effect"])}" style="{";".join(style)};">\n'
+        '  <div class="text"></div>\n'
+        "</div>"
     )
+
+
+def image_element_ids(scene):
+    """Map each image layer id to the element id it is emitted as.
+
+    Positional like the text ids, and the single source of the imagery half of
+    the layer map.
+    """
+    out = {}
+    group = 0
+    for layer in sorted(scene["imageLayers"], key=lambda item: (item["zIndex"], item["id"])):
+        if layer["type"] == "background":
+            out[layer["id"]] = "background-1"
+            continue
+        group += 1
+        out[layer["id"]] = f"decorations-{group}"
+    return out
 
 
 def _image_layers(scene, assets, canvas):
@@ -137,23 +213,24 @@ def _image_layers(scene, assets, canvas):
     makes the output readable to a human editor even though z-index governs.
     """
     out = []
-    group = 0
+    ids = image_element_ids(scene)
     layers = sorted(scene["imageLayers"], key=lambda item: (item["zIndex"], item["id"]))
 
     for layer in layers:
         url = _asset_url(layer, assets)
+        element_id = ids[layer["id"]]
         if layer["type"] == "background":
             out.append(
-                f'<img class="background" id="background-1" src="{_attr(url)}" alt="" '
+                f'<img class="background" id="{_attr(element_id)}" src="{_attr(url)}" alt="" '
                 f'style="position:absolute;left:0;top:0;'
                 f'width:{canvas["width"]}px;height:{canvas["height"]}px;'
                 f'object-fit:{_fit(layer)};z-index:{_z(layer)};">'
             )
             continue
 
-        group += 1
+        group = int(element_id.rsplit("-", 1)[1])
         out.append(
-            f'<div class="badges b{group}" id="decorations-{group}" '
+            f'<div class="badges b{group}" id="{_attr(element_id)}" '
             f'data-asset-type="image" style="position:absolute;'
             f'left:{_px(layer["x"])};top:{_px(layer["y"])};'
             f'width:{_px(layer["width"])};height:{_px(layer["height"])};'

@@ -191,3 +191,252 @@ def test_background_is_resampled_to_the_canvas():
 def test_undecodable_bytes_rejected():
     with pytest.raises(AssetInvalid, match="not a decodable image"):
         va.load_rgba(b"this is not a png")
+
+
+# --- components the layout draws must not also be pixels -----------------------
+#
+# The defect this catches: a CTA background or a contact circle both drawn in CSS
+# and left in the overlay (or the photograph). Nothing looks wrong until the
+# customer moves or hides the editable one and the baked copy stays behind.
+
+
+PANEL_BOX = {"x": 20, "y": 20, "width": 100, "height": 100}
+ICON_BOX = {"x": 150, "y": 20, "width": 30, "height": 30}
+
+
+def decomposed_scene(samples=None):
+    return {
+        "canvas": CANVAS,
+        "overlaySamples": samples if samples is not None else GOOD_SAMPLES,
+        "textLayers": [],
+        "shapeLayers": [
+            {"id": "s_panel", "type": "shape", "kind": "panel", "color": "#C81E3C",
+             **PANEL_BOX},
+        ],
+        "imageLayers": [
+            {"id": "l_bg", "type": "background", "x": 0, "y": 0,
+             "width": 200, "height": 200},
+            {"id": "l_deco", "type": "decoration", "x": 0, "y": 0,
+             "width": 200, "height": 200},
+            {"id": "i_phone", "type": "image", "assetId": "icon-phone", **ICON_BOX},
+        ],
+        "components": [
+            {"id": "c_panel", "kind": "editableShape", "layerId": "s_panel",
+             "pairsWith": None, "note": None},
+            {"id": "c_icon", "kind": "rasterIcon", "layerId": "i_phone",
+             "pairsWith": None, "note": None},
+        ],
+    }
+
+
+def test_a_cta_background_left_in_the_overlay_is_rejected_as_a_duplicate():
+    """The opaque panel in `overlay()` sits exactly where the CSS panel goes."""
+    with pytest.raises(InvalidTransparency) as raised:
+        va.check_no_baked_components(png(overlay()), decomposed_scene(), CANVAS)
+
+    assert "s_panel" in raised.value.message
+    assert "duplicate" in raised.value.message
+    # What the bounded overlay repair is told: where it is and what to do.
+    assert "x=20, y=20 (100x100 px" in raised.value.defect
+    assert "leave genuine transparency" in raised.value.defect
+
+
+def test_an_overlay_with_the_components_removed_passes():
+    cleared = overlay()
+    for x in range(PANEL_BOX["x"], PANEL_BOX["x"] + PANEL_BOX["width"]):
+        for y in range(PANEL_BOX["y"], PANEL_BOX["y"] + PANEL_BOX["height"]):
+            cleared.putpixel((x, y), (0, 0, 0, 0))
+
+    measured = va.check_no_baked_components(png(cleared), decomposed_scene(), CANVAS)
+
+    assert [c["layerId"] for c in measured] == ["s_panel", "i_phone"]
+    assert [c["kind"] for c in measured] == ["editableShape", "rasterIcon"]
+
+
+def test_a_pictogram_left_in_the_overlay_is_rejected():
+    art = overlay(opaque_box=(ICON_BOX["x"], ICON_BOX["y"],
+                              ICON_BOX["x"] + ICON_BOX["width"],
+                              ICON_BOX["y"] + ICON_BOX["height"]))
+    with pytest.raises(InvalidTransparency, match="i_phone"):
+        va.check_no_baked_components(png(art), decomposed_scene(), CANVAS)
+
+
+def test_a_soft_edge_crossing_a_component_box_is_not_called_a_duplicate():
+    """Only the middle is measured, and a faint edge is below the threshold."""
+    art = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+    for x in range(PANEL_BOX["x"], PANEL_BOX["x"] + PANEL_BOX["width"]):
+        for y in range(PANEL_BOX["y"], PANEL_BOX["y"] + 6):
+            art.putpixel((x, y), (200, 30, 60, 40))
+
+    assert va.check_no_baked_components(png(art), decomposed_scene(), CANVAS)
+
+
+def test_a_scene_without_a_plan_is_not_checked_for_duplicates():
+    assert va.check_no_baked_components(png(overlay()), scene(GOOD_SAMPLES), CANVAS) == []
+
+
+def test_a_photograph_that_still_shows_a_removed_panel_is_rejected():
+    img = photo()
+    for x in range(PANEL_BOX["x"], PANEL_BOX["x"] + PANEL_BOX["width"]):
+        for y in range(PANEL_BOX["y"], PANEL_BOX["y"] + PANEL_BOX["height"]):
+            img.putpixel((x, y), (200, 30, 60))          # #C81E3C, the panel colour
+
+    with pytest.raises(InvalidTransparency) as raised:
+        va.check_component_area_repainted(png(img), decomposed_scene(), CANVAS)
+
+    assert "s_panel" in raised.value.message
+    assert "two copies" in raised.value.message
+    assert "Reconstruct the photograph behind it" in raised.value.defect
+
+
+def test_a_photograph_repainted_behind_the_panel_passes():
+    checked = va.check_component_area_repainted(png(photo()), decomposed_scene(), CANVAS)
+    assert [c["layerId"] for c in checked] == ["s_panel"]
+
+
+# --- what may be left in the artwork and what may not -------------------------
+
+
+def contact_scene():
+    """A CTA background, a contact circle, a pictogram and a loose chevron."""
+    doc = decomposed_scene()
+    doc["textLayers"] = [
+        {"id": "t_cta", "role": "cta", "contentKey": "cta.primary"},
+        {"id": "t_phone", "role": "contact", "contentKey": "contact.phone"},
+    ]
+    doc["shapeLayers"].append(
+        {"id": "s_circle", "type": "shape", "kind": "circle", "color": "#FFD43B",
+         "x": 20, "y": 150, "width": 30, "height": 30})
+    doc["shapeLayers"].append(
+        {"id": "s_chevron", "type": "shape", "kind": "chevron", "color": None,
+         "x": 150, "y": 20, "width": 30, "height": 30})
+    doc["components"][0]["pairsWith"] = "t_cta"
+    doc["components"][1]["pairsWith"] = "t_phone"
+    doc["components"] += [
+        {"id": "c_circle", "kind": "editableShape", "layerId": "s_circle",
+         "pairsWith": "t_phone", "note": None},
+        {"id": "c_chevron", "kind": "editableShape", "layerId": "s_chevron",
+         "pairsWith": None, "note": None},
+        {"id": "c_photo", "kind": "photo", "layerId": "l_bg", "pairsWith": None,
+         "note": None},
+        {"id": "c_deco", "kind": "retainedRaster", "layerId": "l_deco",
+         "pairsWith": None, "note": "torn yellow edge"},
+    ]
+    return doc
+
+
+def test_the_cta_background_the_circle_and_the_icon_must_stay_editable():
+    required = va.mandatory_component_ids(contact_scene())
+
+    assert required == {"c_panel", "c_circle", "c_icon"}
+
+
+def test_a_decorative_shape_is_not_mandatory():
+    assert "c_chevron" not in va.mandatory_component_ids(contact_scene())
+
+
+def test_the_error_carries_the_components_it_measured():
+    """So the caller can tell a chevron it may give up from a circle it may not."""
+    with pytest.raises(InvalidTransparency) as raised:
+        va.check_no_baked_components(png(overlay()), decomposed_scene(), CANVAS)
+
+    surrender = raised.value.surrender
+    assert surrender["owner"] == "overlay"
+    assert [c["componentId"] for c in surrender["components"]] == ["c_panel"]
+
+
+def test_giving_a_shape_back_to_the_artwork_keeps_the_plan_complete():
+    from lib import scene_patch
+    from lib.schemas import parse_scene
+
+    doc = contact_scene()
+    doc["canvas"] = {"width": 200, "height": 200}
+
+    patched = scene_patch.rasterize_shapes(
+        doc, ["s_chevron"], "overlay", "the overlay still contained it after repair")
+
+    assert [s["id"] for s in patched["shapeLayers"]] == ["s_panel", "s_circle"]
+    assert not [c for c in patched["components"] if c["layerId"] == "s_chevron"]
+    # The decoration layer now declares what it kept.
+    decoration = next(c for c in patched["components"] if c["layerId"] == "l_deco")
+    assert "chevron s_chevron" in decoration["note"]
+    # And the original is untouched: patches are never applied in place.
+    assert len(doc["shapeLayers"]) == 3
+
+
+def test_a_shape_the_scene_does_not_have_cannot_be_given_back():
+    from lib import scene_patch
+    from lib.errors import InvalidScene
+
+    with pytest.raises(InvalidScene, match="s_nothing"):
+        scene_patch.rasterize_shapes(contact_scene(), ["s_nothing"], "overlay", "why")
+
+
+def test_an_opaque_sample_where_the_layout_now_draws_is_not_evidence():
+    """Measured on a live run: the extractor sampled the call-to-action
+    background as solid artwork, the overlay correctly removed it, and the
+    overlay was then rejected for removing it."""
+    doc = decomposed_scene([
+        {"kind": "opaque", "x": PANEL_BOX["x"] + 10, "y": PANEL_BOX["y"] + 10,
+         "width": 20, "height": 20},
+        {"kind": "transparent", "x": 150, "y": 150, "width": 40, "height": 40},
+    ])
+    cleared = overlay()
+    for x in range(PANEL_BOX["x"], PANEL_BOX["x"] + PANEL_BOX["width"]):
+        for y in range(PANEL_BOX["y"], PANEL_BOX["y"] + PANEL_BOX["height"]):
+            cleared.putpixel((x, y), (0, 0, 0, 0))
+
+    assert va.sample_failures(cleared.convert("RGBA"), doc, CANVAS) == []
+
+
+def test_a_transparent_sample_is_still_checked_inside_a_component():
+    """Only the opaque expectation is dropped; a region that must show the
+    photograph through is still a region that must show it through."""
+    doc = decomposed_scene([
+        {"kind": "transparent", "x": PANEL_BOX["x"] + 10, "y": PANEL_BOX["y"] + 10,
+         "width": 20, "height": 20},
+    ])
+
+    failures = va.sample_failures(overlay().convert("RGBA"), doc, CANVAS)
+
+    assert [f["kind"] for f in failures] == ["transparent"]
+
+
+def test_clearing_a_component_box_leaves_the_artwork_around_it():
+    art = overlay()
+    cleared = va.erase_component_areas(
+        png(art), [{"layerId": "s_panel", "box": PANEL_BOX}], CANVAS)
+
+    out, _ = va.load_rgba(cleared)
+    inside = out.crop((PANEL_BOX["x"], PANEL_BOX["y"],
+                       PANEL_BOX["x"] + PANEL_BOX["width"],
+                       PANEL_BOX["y"] + PANEL_BOX["height"]))
+    assert inside.getchannel("A").getextrema() == (0, 0)
+    # overlay()'s panel ends where the box does, and its feathered edge sits one
+    # row below: untouched, so only the box was cleared.
+    assert out.getpixel((60, PANEL_BOX["y"] + PANEL_BOX["height"]))[3] == 128
+
+
+def test_a_dark_circle_over_dark_photography_is_not_called_a_duplicate():
+    """Measured on a live run: a dark contact circle's colour matched the dark,
+    repainted photography behind it, and a finished design failed. A shape still
+    painted there is flat; photography is not."""
+    from PIL import ImageDraw
+
+    circle = {"id": "s_circle", "type": "shape", "kind": "circle",
+              "color": "#1B1A0E", "x": 30, "y": 30, "width": 40, "height": 40}
+    doc = decomposed_scene()
+    doc["shapeLayers"] = [circle]
+    doc["components"] = [{"id": "c_circle", "kind": "editableShape",
+                          "layerId": "s_circle", "pairsWith": None, "note": None}]
+
+    textured = Image.new("RGB", (200, 200))
+    for x in range(200):                       # dark, but photographic
+        for y in range(200):
+            textured.putpixel((x, y), ((x * 3) % 45, (y * 2) % 44, (x + y) % 30))
+    assert va.check_component_area_repainted(png(textured), doc, CANVAS)
+
+    flat = textured.copy()
+    ImageDraw.Draw(flat).rectangle((30, 30, 70, 70), fill="#1B1A0E")
+    with pytest.raises(InvalidTransparency, match="s_circle"):
+        va.check_component_area_repainted(png(flat), doc, CANVAS)

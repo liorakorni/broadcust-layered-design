@@ -170,7 +170,9 @@ def fit_text_layers(html, canvas):
 _FIT_SCRIPT = """(options) => {
     const changed = {};
 
-    for (const el of document.querySelectorAll('.words')) {
+    // Decorations are .words too (they are editor layers), but they carry no
+    // copy, so there is nothing to fit. Only that marker is exempt.
+    for (const el of document.querySelectorAll('.words:not([data-role="decoration"])')) {
         const inner = el.querySelector('.text');
         if (!inner || !inner.textContent.trim()) continue;
 
@@ -263,7 +265,11 @@ def _inspect(page, canvas):
                 seen.add(el.id);
             }
 
-            for (const el of document.querySelectorAll('.words')) {
+            // A shape is a .words element with an empty .text child, so the copy
+            // checks below are scoped to layers that are not marked as
+            // decorations. Nothing else is exempt.
+            for (const el of document.querySelectorAll(
+                    '.words:not([data-role="decoration"])')) {
                 const inner = el.querySelector('.text');
                 if (!inner) continue;
                 // scrollHeight exceeding clientHeight is text that did not fit.
@@ -287,7 +293,8 @@ def _inspect(page, canvas):
                 }
             }
 
-            for (const el of document.querySelectorAll('.words, .badges, .background, .shape')) {
+            // Out of bounds applies to every layer, decorations included.
+            for (const el of document.querySelectorAll('.words, .badges, .background')) {
                 const r = el.getBoundingClientRect();
                 if (r.left < -1 || r.top < -1
                     || r.right > canvas.width + 1
@@ -299,7 +306,10 @@ def _inspect(page, canvas):
 
             return {
                 problems,
-                textLayers: document.querySelectorAll('.words').length,
+                textLayers: document.querySelectorAll(
+                    '.words:not([data-role="decoration"])').length,
+                decorations: document.querySelectorAll(
+                    '.words[data-role="decoration"]').length,
                 images: document.images.length,
             };
         }""",

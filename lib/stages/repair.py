@@ -24,11 +24,12 @@ import re
 
 import conf
 from lib import (
-    artifacts, content_check, dependencies, design_state, jobs, policy_context,
-    repair_routing, scene_patch, schemas,
+    artifacts, assemble_html, content_check, dependencies, design_state, jobs,
+    policy_context, repair_routing, scene_patch, schemas,
 )
 from lib.errors import (
-    AssetInvalid, CorrectionExhausted, MandatoryContentMissing, RepairRouteUnresolved, Stage,
+    AssemblyFailed, AssetInvalid, CorrectionExhausted, MandatoryContentMissing,
+    RepairNoProgress, RepairRouteUnresolved, Stage,
 )
 
 #: Approved-copy roles to scene text roles. The copy manifest uses its own
@@ -81,6 +82,8 @@ def light(job_id, attempt, asset_id=None):
     patched, applied = apply_patches(job_id, job, scene, copy_items, usable, canvas)
 
     # A correction must not cost the design any mandatory text it still had.
+    # Checked before progress and scope, because losing approved copy is the more
+    # specific fault and deserves the more specific error.
     after_issues = content_check.check(patched, copy_items)
     introduced = [i for i in after_issues if i["affected"] not in {b["affected"] for b in before_issues}]
     if introduced:
@@ -88,6 +91,8 @@ def light(job_id, attempt, asset_id=None):
             "The correction would have removed approved text ("
             + ", ".join(i["affected"] for i in introduced) + "); it was not applied."
         )
+
+    touched = verify_changed(scene, patched, usable, job, produced=job["artifacts"])
 
     kinds = dependencies.classify_changes(scene, patched)
     invalidated = sorted(dependencies.invalidated_checks(kinds))
@@ -106,6 +111,7 @@ def light(job_id, attempt, asset_id=None):
         "categories": routing["categories"],
         "reason": routing["reason"],
         "applied": applied,
+        "touched": touched,
         "changeKinds": sorted(kinds),
         "invalidatedChecks": invalidated,
         "retainedChecks": sorted(set(dependencies.ALL_CHECKS) - set(invalidated)),
@@ -121,6 +127,11 @@ def light(job_id, attempt, asset_id=None):
     }
     result = {
         "route": repair_routing.ROUTE_LIGHT,
+        # The workflow's RepairRoute choice reads this. A Step Functions choice
+        # on a path that is absent fails the execution outright - uncatchable, so
+        # the job is left RUNNING with no error - which is what happened the
+        # first time a live review routed a light repair.
+        "next": "assemble",
         "nextAttempt": attempt + 1,
         "repair": record_key,
         "categories": routing["categories"],
@@ -216,11 +227,153 @@ def asset(job_id, attempt, asset_id=None):
 
 
 def _existing(job_id, key):
-    """The record a previous (retried) invocation wrote, or None."""
+    """The record a previous (retried) invocation wrote, or None.
+
+    Optional by contract: on the first invocation there is nothing there. Only a
+    genuine absence returns None - a denied read propagates, because a repair
+    that cannot see its own record must not quietly repair a second time.
+    """
+    return artifacts.get_json_optional(job_id, key)
+
+
+def verify_changed(before, after, routed, job, produced):
+    """Prove the patch changed the design, and changed only what was asked.
+
+    Three ways a repair can report success while fixing nothing: the patch sets a
+    property to the value it already had, it renames a field the assembler does
+    not read, or it lands on an element the review never mentioned. The first two
+    are indistinguishable from a working repair unless the scene and the assembled
+    CSS are both compared; the third passes every schema and still breaks a part
+    of the design that was correct.
+
+    Returns `{"changed": {layerId: [property, ...]}, "styleChanged": [elementId]}`.
+    """
+    touched = _changed_properties(before, after)
+    if not touched:
+        raise RepairNoProgress(
+            "The validated patch changed nothing in the design: "
+            + _describe_request(routed)
+            + ". A correction that leaves the design identical is not a repair."
+        )
+
+    requested = _requested_elements(routed)
+    # An empty request means content restoration or an added shape, which name
+    # their elements differently; scope is then enforced by the content check.
+    if requested:
+        stray = sorted(set(touched) - requested)
+        if stray:
+            raise RepairRouteUnresolved(
+                "The patch changed "
+                + ", ".join(stray)
+                + ", which the review did not name. Only "
+                + ", ".join(sorted(requested))
+                + " may change."
+            )
+
+    styled = _verify_css_changed(before, after, touched, job, produced)
+    return {
+        "changed": {element: sorted(properties) for element, properties in touched.items()},
+        "styleChanged": styled,
+    }
+
+
+def _changed_properties(before, after):
+    """`{layerId: {property, ...}}` for every layer that differs."""
+    kinds = ("textLayers", "shapeLayers", "imageLayers")
+    changed = {}
+    for kind in kinds:
+        old = {l["id"]: l for l in before.get(kind) or []}
+        new = {l["id"]: l for l in after.get(kind) or []}
+        for layer_id in sorted(set(old) | set(new)):
+            if layer_id not in old:
+                changed.setdefault(layer_id, set()).add("added")
+                continue
+            if layer_id not in new:
+                changed.setdefault(layer_id, set()).add("removed")
+                continue
+            for name in sorted(set(old[layer_id]) | set(new[layer_id])):
+                if old[layer_id].get(name) != new[layer_id].get(name):
+                    changed.setdefault(layer_id, set()).add(name)
+    if (before.get("effects") or []) != (after.get("effects") or []):
+        changed.setdefault("effects", set()).add("owner")
+    return changed
+
+
+def _requested_elements(routed):
+    """The element ids the review's own constraints name, scene-side."""
+    requested = set()
+    for record in routed:
+        patch = record.get("patch") or {}
+        requested.update(patch.get("layers") or {})
+        for addition in patch.get("addShapes") or []:
+            # An addition names its elements by consequence rather than by id: the
+            # shape the preset creates, and the effects list that records its new
+            # owner. Measured live - a review that asked for a gradient and a
+            # headline change in the same round had its own gradient reported as
+            # an element nobody had named.
+            requested.add(scene_patch.shape_id_for(addition["effect"]))
+            requested.add("effects")
+    return requested
+
+
+def _describe_request(routed):
+    codes = sorted({r.get("code") or r.get("target", "?") for r in routed})
+    return ", ".join(codes) or "no usable finding"
+
+
+#: Properties that change the design without changing the emitted CSS: the text
+#: fitter reads `overflow` to decide what it may shrink, and the renderer's own
+#: checks read it back. A change confined to these is real even though the
+#: assembled document is identical, so it is exempt from the HTML comparison.
+_INDIRECT_PROPERTIES = frozenset({"overflow"})
+
+
+def _verify_css_changed(before, after, touched, job, produced):
+    """Assemble both scenes and confirm the delivered document differs.
+
+    The scene is only the input to assembly. A field the assembler does not read
+    changes the scene document and nothing the renderer or an editor ever sees, so
+    the check that matters is on the HTML the design is delivered as. Comparing
+    the whole document rather than one element's style covers reworded text,
+    restored layers and stacking changes as well as styling.
+
+    Returns the element ids whose own style changed, as evidence for the record.
+    """
+    urls = {
+        entry["assetId"]: entry.get("url") or "https://example.invalid/placeholder.png"
+        for entry in (produced.get(Stage.ASSEMBLE) or {}).get("assets", [])
+    }
+    canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
     try:
-        return artifacts.get_json(job_id, key)
-    except AssetInvalid:
-        return None
+        old_html = assemble_html.assemble(before, urls, canvas)
+        new_html = assemble_html.assemble(after, urls, canvas)
+    except AssemblyFailed:
+        # Assembly runs for real immediately after this; let it report the fault
+        # rather than turning an assembly problem into a "no progress" verdict.
+        return []
+
+    if old_html == new_html:
+        indirect_only = all(
+            properties <= _INDIRECT_PROPERTIES for properties in touched.values()
+        )
+        if indirect_only:
+            return []
+        raise RepairNoProgress(
+            "The patch changed the scene ("
+            + ", ".join(f"{element}.{name}" for element in sorted(touched)
+                        for name in sorted(touched[element]))
+            + ") but not the assembled HTML, so the rendered design would be "
+            "identical."
+        )
+
+    element_ids = {**assemble_html.element_ids(after), **assemble_html.shape_element_ids(after)}
+    return sorted(
+        element
+        for element in touched
+        if element in element_ids
+        and assemble_html.element_style(old_html, element_ids[element])
+        != assemble_html.element_style(new_html, element_ids[element])
+    )
 
 
 def apply_patches(job_id, job, scene, copy_items, routed, canvas):
@@ -249,7 +402,9 @@ def apply_patches(job_id, job, scene, copy_items, routed, canvas):
 
     for r in routed:
         for addition in (r["patch"] or {}).get("addShapes", []):
-            patched = scene_patch.add_shape(patched, addition["preset"], effect_id=addition["effect"])
+            patched = scene_patch.add_shape(
+                patched, addition["preset"], effect_id=addition["effect"],
+                take_over=bool(addition.get("takeOver")))
             applied.append({"target": "layout", "addedShape": addition["effect"], "preset": addition["preset"]})
     for r in routed:
         if r["target"] in ("typography", "layout") and r["patch"] and "layers" in r["patch"]:

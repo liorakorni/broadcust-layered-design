@@ -194,6 +194,18 @@ class StartRequest(Strict):
     # text-free photograph. Absent -> "legacy". "layout-first" is refused unless the
     # deployment enables it, and does not support suppliedAssets.
     designFlow: str = "legacy"
+    # Direction, decided before the concept is generated rather than patched
+    # afterwards. "auto" resolves from the brief and the copy's script
+    # (lib/direction_policy.py); the resolved values and the reason are recorded
+    # in the policy document. `layoutDirection` governs where the columns sit,
+    # `textDirection` how the writing runs, and they are separate because a
+    # Hebrew design still has left-to-right phone numbers in it.
+    layoutDirection: Literal["auto", "rtl", "ltr"] = "auto"
+    textDirection: Literal["auto", "rtl", "ltr"] = "auto"
+    # Whether the reference's own composition direction is kept, or adapted to
+    # the locale of the copy. Adapting is the default: a Hebrew brief gets a
+    # Hebrew composition even when the reference is an English one.
+    referenceLayoutPolicy: Literal["adapt-to-locale", "preserve"] = "adapt-to-locale"
 
     @field_validator("designFlow", mode="before")
     @classmethod
@@ -286,6 +298,16 @@ def canonical_request_hash(request: "StartRequest") -> str:
         body.pop("reviewStrictness")
     if body.get("designFlow") == "legacy":
         body.pop("designFlow")
+    # Same reasoning for the direction fields: "auto" and "adapt-to-locale" are
+    # what every request accepted before they existed meant, so a replay of one
+    # must still hash to the same value.
+    for field, default in (
+        ("layoutDirection", "auto"),
+        ("textDirection", "auto"),
+        ("referenceLayoutPolicy", "adapt-to-locale"),
+    ):
+        if body.get(field) == default:
+            body.pop(field)
     canonical = json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
@@ -584,6 +606,40 @@ class EffectOwner(Strict):
     note: Optional[str] = None
 
 
+#: How each element of the approved concept is delivered. The same plan drives
+#: extraction (what to decompose), assembly (what is drawn in code) and
+#: validation (what must not still be baked into an image).
+COMPONENT_KINDS = (
+    "photo",            # the photograph itself
+    "editableText",     # a text layer
+    "editableShape",    # a panel, circle or gradient drawn in CSS
+    "rasterIcon",       # an independent transparent image, e.g. a phone pictogram
+    "retainedRaster",   # artwork too complex to decompose; stays in the overlay
+)
+
+
+class Component(Strict):
+    """One element of the approved concept, and how it is delivered.
+
+    This is the decomposition plan: every component of the concept is classified
+    once, and nothing is left unclassified. `pairsWith` records that a background
+    circle and a pictogram belong to a particular contact line, or that a panel
+    is the background of a particular call to action - which is what lets
+    validation check that a contact row really arrived as three independent
+    layers rather than one baked picture.
+    """
+
+    id: str
+    kind: Literal[
+        "photo", "editableText", "editableShape", "rasterIcon", "retainedRaster",
+    ]
+    #: The scene layer that delivers it.
+    layerId: str
+    #: The text layer this belongs to, when it is part of a pair or a row.
+    pairsWith: Optional[str] = None
+    note: Optional[str] = None
+
+
 class SampleRegion(Strict):
     """A region the overlay must be transparent or opaque in.
 
@@ -608,6 +664,10 @@ class Scene(Strict):
     # nothing is drawn in code and no effect has a declared owner.
     shapeLayers: list[ShapeLayer] = Field(default_factory=list, max_length=40)
     effects: list[EffectOwner] = Field(default_factory=list, max_length=20)
+    #: The decomposition plan. Empty means the scene was never decomposed (every
+    #: scene written before this existed), and the plan checks are skipped; a plan
+    #: that exists must be complete.
+    components: list[Component] = Field(default_factory=list, max_length=40)
 
 
 def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
@@ -658,6 +718,7 @@ def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
                 f"fontFamily {layer.fontFamily!r} is not an installed, approved font."
             )
     check_effect_ownership(scene)
+    check_component_plan(scene)
     return scene
 
 
@@ -704,6 +765,105 @@ def check_effect_ownership(scene):
                 f"The design declares {len(owners)} {kind} effects "
                 f"({', '.join(e.id for e in owners)}); there may be only one."
             )
+
+
+#: Text roles whose element is a contact line. Each one is expected to arrive as
+#: three independent layers: a circle, a pictogram and the value itself.
+CONTACT_KEY_PREFIX = "contact."
+
+
+def check_component_plan(scene):
+    """A decomposition plan that exists must be complete and consistent.
+
+    An empty plan means the scene predates the plan (or comes from a flow that
+    does not decompose), and nothing here applies. A plan that exists is the
+    contract for what the customer can edit, so an element it classifies must be
+    delivered the way it says, and an element it omits is a component someone
+    forgot to decompose - which in practice means it is still baked into a
+    picture, where no one can move it.
+    """
+    if not scene.components:
+        return
+
+    layers = {layer.id: layer for layer in scene.textLayers}
+    layers.update({layer.id: layer for layer in scene.imageLayers})
+    layers.update({layer.id: layer for layer in scene.shapeLayers})
+    expected = {
+        "photo": ("background",),
+        "editableText": ("text",),
+        "editableShape": ("shape",),
+        "rasterIcon": ("image",),
+        "retainedRaster": ("decoration", "image"),
+    }
+
+    classified = {}
+    for component in scene.components:
+        layer = layers.get(component.layerId)
+        if layer is None:
+            raise InvalidScene(
+                f"Component {component.id!r} names layer {component.layerId!r}, "
+                "which the scene does not contain."
+            )
+        if layer.type not in expected[component.kind]:
+            raise InvalidScene(
+                f"Component {component.id!r} is classified {component.kind!r} but "
+                f"layer {component.layerId!r} is a {layer.type} layer."
+            )
+        if component.pairsWith and component.pairsWith not in layers:
+            raise InvalidScene(
+                f"Component {component.id!r} pairs with {component.pairsWith!r}, "
+                "which the scene does not contain."
+            )
+        classified.setdefault(component.layerId, []).append(component)
+
+    # Text is unambiguous - it is delivered as text or it is not there at all - so
+    # the completeness check is on the elements that could silently stay pixels.
+    for layer in list(scene.shapeLayers) + [
+        l for l in scene.imageLayers if l.type != "background"
+    ]:
+        if layer.id not in classified:
+            raise InvalidScene(
+                f"Layer {layer.id!r} has no entry in the decomposition plan; every "
+                "shape and non-photograph image must be classified."
+            )
+
+    paired = {}
+    for component in scene.components:
+        if component.pairsWith:
+            paired.setdefault(component.pairsWith, set()).add(component.kind)
+
+    for text in scene.textLayers:
+        kinds = paired.get(text.id, set())
+        if "retainedRaster" in kinds:
+            continue                        # deliberately left as artwork, declared
+        if text.role == "cta" and not _has_background(scene, text, kinds):
+            raise InvalidScene(
+                f"Call to action {text.id!r} has neither an editable background "
+                "shape nor a declared retained raster; its button would still be "
+                "part of a picture."
+            )
+        if text.contentKey.startswith(CONTACT_KEY_PREFIX):
+            missing = {"editableShape", "rasterIcon"} - kinds
+            if missing:
+                raise InvalidScene(
+                    f"Contact line {text.id!r} is missing {', '.join(sorted(missing))} "
+                    "in the decomposition plan; a contact row is a circle, a "
+                    "pictogram and the value, each editable on its own."
+                )
+
+
+def _has_background(scene, text, paired_kinds):
+    """A CTA background: declared by pairing, or a shape drawn under the words."""
+    if "editableShape" in paired_kinds:
+        return True
+    return any(
+        shape.zIndex <= text.zIndex
+        and shape.x <= text.x
+        and shape.y <= text.y
+        and shape.x + shape.width >= text.x + text.width
+        and shape.y + shape.height >= text.y + text.height
+        for shape in scene.shapeLayers
+    )
 
 
 # --------------------------------------------------------------------------
@@ -898,6 +1058,10 @@ class ConceptReviewVerdict(Strict):
     issues: list[ConceptIssue] = Field(max_length=60)
     suggestions: list[str] = Field(max_length=40)
     constraintConflict: ConstraintConflict
+    #: Whether the concept is composed in the direction the policy resolved.
+    #: Defaults to None so a verdict stored before the check existed can still be
+    #: re-decided; the backend reads a missing answer as a check that did not run.
+    compositionDirectionOk: Optional[bool] = None
 
 
 def parse_reference_analysis(payload):

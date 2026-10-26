@@ -14,11 +14,14 @@ conditional update so it holds per job, not per task retry.
 from __future__ import annotations
 
 import io
+import logging
 
 import conf
 from lib import artifacts, dependencies, design_state, jobs, scene_patch, validate_assets
 from lib.errors import InvalidScene, InvalidTransparency, OverlayRepairNeeded, Stage
 from lib.providers import vision
+
+log = logging.getLogger("layered-design.validate")
 
 COMPOSITE_SCHEMA = {
     "type": "object",
@@ -174,6 +177,11 @@ def run(job_id, attempt, asset_id=None):
     )
     try:
         stats = validate_assets.validate_overlay(overlay, scene, canvas)
+        # Inside the same try, so a component still baked into one of the assets
+        # goes through the bounded repair that already exists rather than failing
+        # the job. Both are deterministic pixel measurements, not model calls.
+        components = validate_assets.check_no_baked_components(overlay, scene, canvas)
+        validate_assets.check_component_area_repainted(background, scene, canvas)
         entries["overlayValidation"] = _entry(
             dependencies.cache_key(
                 "overlayValidation", decoration=shas["decoration"],
@@ -196,9 +204,11 @@ def run(job_id, attempt, asset_id=None):
         fidelity = checked(
             "fidelity",
             {**shas, "concept": concept_sha, "model": conf.REVIEW_MODEL,
-             "prompt": dependencies.digest(_FIDELITY_PROMPT)},
+             "prompt": dependencies.digest(_FIDELITY_PROMPT),
+             "components": dependencies.digest(components)},
             lambda: _fidelity_detail(
-                inspect_fidelity(background, overlay, concept, job_id, attempt)
+                inspect_fidelity(background, overlay, concept, job_id, attempt,
+                                 components=components)
             ),
             bind={"assets": dict(shas), "concept": concept_sha},
         )
@@ -224,6 +234,15 @@ def run(job_id, attempt, asset_id=None):
         # workflow routes back to a regenerated overlay. Otherwise the original
         # terminal error propagates.
         _request_repair_or_fail(job_id, exc)
+        if _erase_duplicates(job_id, job, attempt, exc, overlay, canvas):
+            # The overlay changed, so every measurement is taken again on it.
+            return run(job_id, attempt, asset_id)
+        if _surrender_to_artwork(job_id, scene, attempt, exc):
+            # The scene no longer draws what the artwork kept, so the same
+            # measurements are taken again on the reduced plan. Each round
+            # removes at least one shape, so this cannot go round for ever, and
+            # no repair is left to spend.
+            return run(job_id, attempt, asset_id)
         raise
 
     result = {
@@ -257,6 +276,118 @@ def _no_detail(_verdict):
 def _fidelity_detail(verdict):
     shading = verdict.get("missingShading") or "none"
     return {"missingShading": shading} if shading != "none" else None
+
+
+def _erase_duplicates(job_id, job, attempt, exc, overlay, canvas):
+    """Clear a duplicate out of the overlay in code once the model would not.
+
+    The repair budget is spent and a panel, circle or pictogram the layout draws
+    is still painted in the artwork. Asking the model again is what the bound
+    exists to prevent, and failing the job throws away a design that is otherwise
+    correct - while the fix is arithmetic: make the component's own box
+    transparent. CLEAN_PHOTO has already repainted the photograph under exactly
+    those boxes and the layout draws its shape over them, so the result is the
+    composition that was intended, with one owner per element.
+
+    Gradients are left alone: a readability gradient's box covers a large part of
+    the canvas, and clearing it would take genuine artwork with it.
+
+    Returns True when a new overlay was written.
+    """
+    surrender = getattr(exc, "surrender", None)
+    if not surrender or surrender["owner"] != "overlay":
+        return False
+    erasable = [c for c in surrender["components"] if c.get("shape") != "gradient"]
+    if not erasable:
+        return False
+
+    cleared = validate_assets.erase_component_areas(overlay, erasable, canvas)
+    names = sorted(c["layerId"] for c in erasable)
+    index = int(job.get("overlayRepairs", 0) or 0)
+    key = artifacts.artifact_key(
+        job_id, Stage.DECORATION_OVERLAY, attempt, f"overlay-cleared-{index}.png")
+    stored = artifacts.put_bytes(key, cleared, "image/png")
+    jobs.record_artifacts(
+        job_id,
+        Stage.DECORATION_OVERLAY,
+        attempt,
+        {
+            "decoration": stored["key"],
+            "sha256": stored["sha256"],
+            "conceptSha256": jobs.approved_concept(job)["sha256"],
+            "clearedInCode": names,
+        },
+    )
+    jobs.add_metric(job_id, "overlayAreasClearedInCode")
+    log.info(
+        "duplicate component areas cleared in code jobId=%s layers=%s",
+        job_id, ",".join(names),
+    )
+    return True
+
+
+def _surrender_to_artwork(job_id, scene, attempt, exc):
+    """Leave a decorative shape in the artwork after the repair could not remove it.
+
+    The bounded overlay repair has already been spent. For the components the
+    document requires to be editable - the call-to-action background, the contact
+    circles, the pictograms - that is the end of it: the error stands, because
+    missing editability is not a defect to downgrade. For a decorative chevron or
+    band it is the opposite: the picture is correct, only less editable than
+    hoped, so the layout stops drawing its copy and the design goes on with a
+    warning that names what stayed baked in.
+
+    Returns True when the scene was changed, False when nothing may be given back.
+    """
+    surrender = getattr(exc, "surrender", None)
+    if not surrender:
+        return False
+    mandatory = validate_assets.mandatory_component_ids(scene)
+    shapes = {s["id"] for s in scene.get("shapeLayers") or []}
+    givable = sorted(
+        {c["layerId"] for c in surrender["components"]
+         if c["componentId"] not in mandatory and c["layerId"] in shapes}
+    )
+    blocked = [c["layerId"] for c in surrender["components"]
+               if c["componentId"] in mandatory]
+    if blocked or not givable:
+        if blocked:
+            log.info(
+                "component must stay editable, not surrendered jobId=%s layers=%s",
+                job_id, ",".join(sorted(blocked)),
+            )
+        return False
+
+    reason = f"the {surrender['owner']} still contained it after repair"
+    patched = scene_patch.rasterize_shapes(scene, givable, surrender["owner"], reason)
+    digest = dependencies.digest(givable)[:8]
+    key = artifacts.artifact_key(
+        job_id, Stage.VALIDATE_ASSETS, attempt, f"scene-rasterized-{digest}.json")
+    stored = artifacts.put_json(key, patched)
+    jobs.set_working_scene(
+        job_id, {"key": stored["key"], "forAttempt": int(attempt), "baseVersion": 0}
+    )
+    jobs.add_metric(job_id, "componentsLeftRasterized")
+    jobs.record_warning(
+        job_id,
+        {
+            "stage": Stage.VALIDATE_ASSETS,
+            "code": "COMPONENT_LEFT_RASTERIZED",
+            "category": "asset-validation",
+            "affected": ",".join(givable),
+            "impact": (
+                "These decorative shapes stayed part of the artwork: the overlay "
+                f"repair could not separate them ({reason}). They look as "
+                "approved but cannot be restyled on their own."
+            ),
+            "suggestion": "Nothing to do unless the customer needs to edit them.",
+        },
+    )
+    log.info(
+        "shapes left rasterized after repair jobId=%s layers=%s owner=%s",
+        job_id, ",".join(givable), surrender["owner"],
+    )
+    return True
 
 
 def _own_missing_shading(job_id, job, scene, attempt, detail):
@@ -351,11 +482,18 @@ def inspect_composites(overlay_bytes, concept_bytes, canvas, job_id, attempt):
     return verdict
 
 
-def inspect_fidelity(background_bytes, overlay_bytes, concept_bytes, job_id, attempt):
+def inspect_fidelity(background_bytes, overlay_bytes, concept_bytes, job_id, attempt,
+                     components=()):
     """Check the stacked layers against the approved concept.
 
     Material displacement is not excused by adjusting the scene: it is recorded as
     the overlay defect so the bounded targeted repair acts on it.
+
+    `components` are the elements the layout draws in CSS. They are deliberately
+    absent from the stacked layers, so the prompt names them: without that the
+    model reports every extracted CTA background as a missing panel, and the
+    design goes round the overlay repair trying to put back something that is
+    meant to be code.
     """
     from PIL import Image
 
@@ -368,7 +506,7 @@ def inspect_fidelity(background_bytes, overlay_bytes, concept_bytes, job_id, att
     stacked.save(buf, format="PNG")
 
     verdict = vision.analyze(
-        _FIDELITY_PROMPT,
+        _FIDELITY_PROMPT + _code_drawn_block(components),
         (concept_bytes, buf.getvalue()),
         schema=FIDELITY_SCHEMA,
         schema_name="composite_fidelity_v1",
@@ -383,6 +521,24 @@ def inspect_fidelity(background_bytes, overlay_bytes, concept_bytes, job_id, att
         error.defect = verdict["description"] or "material displacement"
         raise error
     return verdict
+
+
+def _code_drawn_block(components):
+    """The part of the fidelity prompt that lists what the layout draws itself."""
+    if not components:
+        return ""
+    lines = "\n".join(
+        f"- a {c.get('shape') or 'graphic'} at x={c['box']['x']}, y={c['box']['y']} "
+        f"({c['box']['width']}x{c['box']['height']} px)"
+        + (f", colour {c['color']}" if c.get("color") else "")
+        + (", a pictogram placed as its own layer" if c["kind"] == "rasterIcon" else "")
+        for c in components
+    )
+    return (
+        "\n\nDRAWN BY THE LAYOUT, intentionally absent from image 2. These are "
+        "rebuilt as editable elements, so their absence is correct: never set "
+        "displaced and never mention them in description because of it.\n" + lines
+    )
 
 
 def _thumbnail_png(image_bytes):

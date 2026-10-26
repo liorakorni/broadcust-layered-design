@@ -541,3 +541,110 @@ def test_an_exhausted_overlay_repair_is_terminal_not_repairable(
     assert not isinstance(exc.value, OverlayRepairNeeded)
     assert exc.value.retryable is False
     assert "without success" in exc.value.message
+
+
+# --- the failing operation is named, not the step that happened to catch it ----
+
+
+def _record(job_id, name, message):
+    """Drive RecordFailure the way the workflow's terminal catch does."""
+    import json as _json
+
+    import handler_stage
+
+    handler_stage.handler(
+        {"jobId": job_id, "recordFailure": True,
+         "failure": {"Error": name, "Cause": _json.dumps({"errorMessage": message})}},
+        None,
+    )
+    return jobs.get_job_unscoped(job_id)["error"]
+
+
+def test_a_repair_light_failure_is_recorded_against_repair_light(pipeline, monkeypatch):
+    """The defect behind job 175103fd: an S3 fault inside REPAIR_LIGHT reported FINALIZE.
+
+    The operation now writes its own identity into the message, which is the only
+    thing that survives the hop through Step Functions.
+    """
+    import handler_stage
+    from lib.errors import ArtifactAccessDenied
+    from lib.stages import repair
+
+    monkeypatch.setattr(repair, "light", lambda **kw: (_ for _ in ()).throw(
+        ArtifactAccessDenied("Access denied reading the repair record.")))
+
+    with pytest.raises(ArtifactAccessDenied) as raised:
+        handler_stage.handler(
+            {"jobId": pipeline["jobId"], "stage": Stage.REVIEW, "attempt": 1,
+             "assetId": None, "operation": "REPAIR_LIGHT"},
+            None,
+        )
+    assert "[REPAIR_LIGHT in REVIEW]" in raised.value.message
+
+    error = _record(pipeline["jobId"], "ArtifactAccessDenied", raised.value.message)
+    assert error["stage"] == Stage.REVIEW
+    assert error["operation"] == "REPAIR_LIGHT"
+    assert error["code"] == "ARTIFACT_ACCESS_DENIED"
+
+
+def test_an_unexpected_error_in_an_operation_still_names_the_operation(pipeline, monkeypatch):
+    """A raw boto or Python error used to escape with no stage and no code."""
+    import handler_stage
+    from lib.errors import LayeredDesignError
+    from lib.stages import repair
+
+    monkeypatch.setattr(repair, "light", lambda **kw: (_ for _ in ()).throw(
+        RuntimeError("some provider payload that must not be surfaced")))
+
+    with pytest.raises(LayeredDesignError) as raised:
+        handler_stage.handler(
+            {"jobId": pipeline["jobId"], "stage": Stage.REVIEW, "attempt": 1,
+             "assetId": None, "operation": "REPAIR_LIGHT"},
+            None,
+        )
+    assert "provider payload" not in raised.value.message
+    error = _record(pipeline["jobId"], "LayeredDesignError", raised.value.message)
+    assert (error["stage"], error["operation"]) == (Stage.REVIEW, "REPAIR_LIGHT")
+
+
+def test_a_pipeline_failure_records_no_operation(pipeline):
+    error = _record(pipeline["jobId"], "InvalidScene", "bad scene [EXTRACT_SCENE]")
+    assert error["stage"] == Stage.EXTRACT_SCENE
+    assert "operation" not in error
+
+
+def test_a_telemetry_failure_does_not_mask_the_original_error(pipeline, monkeypatch):
+    """Observability must not become a failure mode of its own."""
+    import handler_stage
+    from lib import telemetry
+    from lib.stages import repair
+
+    monkeypatch.setattr(telemetry, "record_stage", lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("metrics write failed")))
+    monkeypatch.setattr(repair, "light", lambda **kw: (_ for _ in ()).throw(
+        InvalidScene("the patch named a layer that is not there.")))
+
+    with pytest.raises(InvalidScene) as raised:
+        handler_stage.handler(
+            {"jobId": pipeline["jobId"], "stage": Stage.REVIEW, "attempt": 1,
+             "assetId": None, "operation": "REPAIR_LIGHT"},
+            None,
+        )
+    assert "named a layer" in raised.value.message
+
+
+def test_telemetry_failure_does_not_fail_a_successful_operation(pipeline, monkeypatch):
+    import handler_stage
+    from lib import telemetry
+    from lib.stages import repair
+
+    monkeypatch.setattr(telemetry, "record_stage", lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("metrics write failed")))
+    monkeypatch.setattr(repair, "light", lambda **kw: {"route": "light", "nextAttempt": 2})
+
+    out = handler_stage.handler(
+        {"jobId": pipeline["jobId"], "stage": Stage.REVIEW, "attempt": 1,
+         "assetId": None, "operation": "REPAIR_LIGHT"},
+        None,
+    )
+    assert out["artifacts"]["nextAttempt"] == 2

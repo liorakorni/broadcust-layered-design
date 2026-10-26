@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 
 import conf
+from lib import schemas
 from lib.errors import AssetInvalid, InvalidTransparency
 
 #: Measured: alpha never reaches 255 even on fully opaque artwork.
@@ -126,8 +127,286 @@ def validate_overlay(data, scene, canvas):
         )
         # What the repair is told: located, actionable, not region numbers.
         error.defect = "\n".join(describe_failures(failures, canvas))
+        held = _components_covering(failures, scene)
+        if held:
+            # The overlay is painting an area that the layout draws itself, so
+            # the photograph cannot show through there. If the bounded repair
+            # cannot separate it, the element can be given back to the overlay
+            # instead - unless it is one of the components that must stay
+            # editable, which the caller decides.
+            error.surrender = {"owner": "overlay", "components": held}
         raise error
     return stats
+
+
+def _components_covering(failures, scene):
+    """Editable components whose box holds a failing transparent sample.
+
+    Measured live: the layout owned the readability gradient and the overlay kept
+    painting it, so a region declared see-through came back 14% transparent and
+    two paid overlay repairs made no difference.
+    """
+    held = {}
+    for component in editable_component_boxes(scene):
+        for failure in failures:
+            if failure["kind"] != "transparent":
+                continue
+            box = {"x": failure["box"][0], "y": failure["box"][1],
+                   "width": failure["box"][2] - failure["box"][0],
+                   "height": failure["box"][3] - failure["box"][1]}
+            if _covers(component["box"], box):
+                held[component["layerId"]] = {**component, "sample": failure["index"]}
+    return list(held.values())
+
+
+#: How much of a failing sample a component must cover before the component is
+#: read as the thing the overlay is still painting there.
+SAMPLE_COVERAGE = 0.8
+
+
+def _covers(outer, inner):
+    """Does `outer` contain at least SAMPLE_COVERAGE of `inner`'s area?"""
+    width = min(outer["x"] + outer["width"], inner["x"] + inner["width"]) \
+        - max(outer["x"], inner["x"])
+    height = min(outer["y"] + outer["height"], inner["y"] + inner["height"]) \
+        - max(outer["y"], inner["y"])
+    area = max(1, inner["width"] * inner["height"])
+    return width > 0 and height > 0 and (width * height) / area >= SAMPLE_COVERAGE
+
+
+#: Mean alpha, as a fraction of fully opaque, above which a component's own box
+#: still contains artwork in the overlay. Low: anything beyond a faint edge means
+#: the element is still painted there, and a duplicate the customer cannot move
+#: is worse than a soft edge that is not.
+BAKED_ALPHA = 0.1
+
+#: Only the middle of a component's box is measured. Its edge legitimately
+#: touches neighbouring artwork, and a model-reported box is approximate.
+COMPONENT_SAMPLE = 0.7
+
+
+def editable_component_boxes(scene):
+    """Boxes of the components the layout draws or places itself.
+
+    Taken from the decomposition plan, so one list drives extraction, assembly
+    and these checks: a component classified editable must not also be pixels in
+    the overlay or the photograph.
+    """
+    layers = {
+        layer["id"]: layer
+        for layer in list(scene.get("shapeLayers") or [])
+        + list(scene.get("imageLayers") or [])
+    }
+    out = []
+    for component in scene.get("components") or []:
+        if component["kind"] not in ("editableShape", "rasterIcon"):
+            continue
+        layer = layers.get(component["layerId"])
+        if layer is None:
+            continue
+        out.append(
+            {
+                "componentId": component["id"],
+                "layerId": layer["id"],
+                "kind": component["kind"],
+                "shape": layer.get("kind"),
+                "color": layer.get("color"),
+                "box": {k: int(layer[k]) for k in ("x", "y", "width", "height")},
+            }
+        )
+    return out
+
+
+def erase_component_areas(data, components, canvas):
+    """Clear the named components' boxes from the overlay, in code.
+
+    The last resort after the bounded overlay repair: the model keeps leaving a
+    panel or a circle in the artwork, and the layout draws the same thing. Here
+    the duplicate is removed arithmetically instead - the box becomes genuinely
+    transparent, which is what the generated overlay was asked for.
+
+    This is safe because CLEAN_PHOTO repaints the photograph under exactly these
+    boxes and the layout then draws its shape over them: the pixels cleared here
+    are pixels the finished design covers again. Only the component's own box is
+    touched, and with a small inset so a neighbouring edge is not clipped.
+
+    Returns the new PNG bytes.
+    """
+    from PIL import Image
+
+    rgba, _ = load_rgba(data)
+    rgba = normalize_alpha(rgba)
+    scale_x = rgba.width / canvas["width"]
+    scale_y = rgba.height / canvas["height"]
+    cleared = Image.new("RGBA", rgba.size, (0, 0, 0, 0))
+    for component in components:
+        box = component["box"]
+        left = int(round(box["x"] * scale_x))
+        top = int(round(box["y"] * scale_y))
+        right = int(round((box["x"] + box["width"]) * scale_x))
+        bottom = int(round((box["y"] + box["height"]) * scale_y))
+        if right <= left or bottom <= top:
+            continue
+        rgba.paste(cleared.crop((left, top, right, bottom)), (left, top))
+    buf = io.BytesIO()
+    rgba.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def mandatory_component_ids(scene):
+    """Components whose editability is not negotiable.
+
+    The acceptance list: the call-to-action background, each contact circle and
+    each contact pictogram. If one of these cannot be separated the design has
+    not met the requirement, and that is a failure rather than a warning.
+
+    Everything else the extractor recognised - a decorative chevron, a band, a
+    row of dots - is a bonus. When the overlay repair cannot remove it after its
+    bounded attempts, the honest outcome is to leave it in the artwork and say
+    so, not to throw away a finished design over a chevron.
+    """
+    texts = {layer["id"]: layer for layer in scene.get("textLayers") or []}
+    required = set()
+    for component in scene.get("components") or []:
+        if component["kind"] == "rasterIcon":
+            required.add(component["id"])
+            continue
+        if component["kind"] != "editableShape":
+            continue
+        paired = texts.get(component.get("pairsWith") or "")
+        if paired and (paired.get("role") == "cta"
+                       or str(paired.get("contentKey", "")).startswith(
+                           schemas.CONTACT_KEY_PREFIX)):
+            required.add(component["id"])
+    return required
+
+
+def check_no_baked_components(data, scene, canvas):
+    """The overlay must not still contain what the layout draws itself.
+
+    This is the duplicate defect: a CTA background or a contact circle both drawn
+    in CSS and left in the artwork. Nothing looks wrong until the customer moves
+    or hides the editable one and the baked copy is still there.
+
+    Raises InvalidTransparency naming each component, so the existing bounded
+    overlay repair is told exactly what to remove. Returns the components it
+    measured.
+    """
+    components = editable_component_boxes(scene)
+    if not components:
+        return []
+
+    rgba, had_alpha = load_rgba(data)
+    if not had_alpha:
+        return []                   # validate_overlay reports the real fault
+    rgba = normalize_alpha(rgba)
+    rgba = resample_to_canvas(rgba, canvas)
+
+    failures = []
+    for component in components:
+        box = _central(component["box"], canvas, COMPONENT_SAMPLE)
+        if box is None:
+            continue
+        alpha = rgba.crop(box).getchannel("A")
+        histogram = alpha.histogram()
+        pixels = sum(histogram) or 1
+        mean = sum(i * count for i, count in enumerate(histogram)) / pixels / 255
+        if mean > BAKED_ALPHA:
+            failures.append({**component, "meanAlpha": mean, "measured": box})
+
+    if failures:
+        error = InvalidTransparency(
+            "The decoration overlay still contains elements the layout draws "
+            "itself: "
+            + "; ".join(
+                f"{f['layerId']} ({f['meanAlpha']:.0%} opaque)" for f in failures
+            )
+            + ". Drawn twice, they would duplicate when one is moved."
+        )
+        error.defect = "\n".join(
+            f"the area at x={f['box']['x']}, y={f['box']['y']} "
+            f"({f['box']['width']}x{f['box']['height']} px on the "
+            f"{canvas['width']}x{canvas['height']} canvas) holds a "
+            f"{f['shape'] or 'graphic'} that the layout draws in code; remove it "
+            "completely and leave genuine transparency there, keeping the artwork "
+            "around it untouched."
+            for f in failures
+        )
+        error.surrender = {"owner": "overlay", "components": failures}
+        raise error
+    return components
+
+
+def check_component_area_repainted(data, scene, canvas):
+    """The photograph must not still show a component that was removed from it.
+
+    CLEAN_PHOTO repaints under a mask that covers each opaque component's box. If
+    the panel's colour is still the dominant colour there, the repaint did not
+    happen and the photograph carries a second copy of the button.
+
+    Raises InvalidTransparency - the class the bounded repair cycle branches on -
+    which regenerates the overlay and then repaints the photograph around it.
+    """
+    from lib import concept_sample
+
+    opaque = [
+        component
+        for component in editable_component_boxes(scene)
+        if component["color"] and component["shape"] != "gradient"
+    ]
+    if not opaque:
+        return []
+
+    failures = []
+    for component in opaque:
+        sampled = concept_sample.median_color(data, component["box"], canvas)
+        if not sampled or concept_sample.differs(component["color"], sampled):
+            continue
+        # The colour matching is not enough on its own: a dark circle over dark
+        # photography matches, and failing the job for that costs a finished
+        # design. A shape still painted here is flat; repainted photography is
+        # not, so the variation decides.
+        spread = concept_sample.color_spread(data, component["box"], canvas)
+        if spread is None or spread > concept_sample.FLAT_SPREAD:
+            continue
+        failures.append({**component, "sampled": sampled, "spread": round(spread, 2)})
+
+    if failures:
+        error = InvalidTransparency(
+            "The cleaned photograph still shows elements the layout draws "
+            "itself: "
+            + "; ".join(f"{f['layerId']} ({f['sampled']})" for f in failures)
+            + ". The area was not repainted, so the design would carry two copies."
+        )
+        error.defect = "\n".join(
+            f"the area at x={f['box']['x']}, y={f['box']['y']} "
+            f"({f['box']['width']}x{f['box']['height']} px) is still filled with "
+            f"{f['color']}; that {f['shape'] or 'graphic'} is drawn by the layout. "
+            "Reconstruct the photograph behind it instead."
+            for f in failures
+        )
+        error.surrender = {"owner": "photo", "components": failures}
+        raise error
+    return opaque
+
+
+def _central(box, canvas, fraction):
+    """The middle `fraction` of a clipped box, or None when too small to measure."""
+    clipped = _clip(box, canvas)
+    if clipped is None:
+        return None
+    left, top, right, bottom = clipped
+    inset_x = (right - left) * (1 - fraction) / 2
+    inset_y = (bottom - top) * (1 - fraction) / 2
+    middle = (
+        int(round(left + inset_x)),
+        int(round(top + inset_y)),
+        int(round(right - inset_x)),
+        int(round(bottom - inset_y)),
+    )
+    if middle[2] - middle[0] < 2 or middle[3] - middle[1] < 2:
+        return None
+    return middle
 
 
 def check_sample_regions(rgba, scene, canvas):
@@ -157,9 +436,18 @@ def sample_failures(rgba, scene, canvas):
     resampled to the canvas, so "74% transparent" means 74% of those pixels.
     """
     failures = []
+    owned = [c["box"] for c in editable_component_boxes(scene)]
     for index, sample in enumerate(scene.get("overlaySamples") or []):
         box = _clip(sample, canvas)
         if box is None:
+            continue
+        if sample["kind"] == "opaque" and any(_overlaps(sample, o) for o in owned):
+            # The sample was taken from the concept, where that panel or circle
+            # was still part of the picture. The layout draws it now, so the
+            # overlay is right to be transparent there and this sample is no
+            # longer evidence of anything. (Measured: the extractor samples the
+            # call-to-action background as solid artwork, and the overlay that
+            # correctly removed it was then rejected for removing it.)
             continue
         histogram = rgba.crop(box).getchannel("A").histogram()
         total = sum(histogram) or 1
@@ -186,6 +474,16 @@ def sample_failures(rgba, scene, canvas):
                 }
             )
     return failures
+
+
+def _overlaps(one, other):
+    """Do two boxes share any pixel?"""
+    return (
+        int(one["x"]) < int(other["x"]) + int(other["width"])
+        and int(other["x"]) < int(one["x"]) + int(one["width"])
+        and int(one["y"]) < int(other["y"]) + int(other["height"])
+        and int(other["y"]) < int(one["y"]) + int(one["height"])
+    )
 
 
 def describe_failures(failures, canvas):

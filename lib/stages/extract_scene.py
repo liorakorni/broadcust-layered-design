@@ -13,11 +13,15 @@ true 1024x1024 frame.
 
 from __future__ import annotations
 
+import logging
+
 import conf
-from lib import artifacts, jobs, prompts, schemas
+from lib import artifacts, concept_sample, jobs, prompts, schemas
 from lib.errors import InvalidScene, Stage
 from lib.stages import independent
 from lib.providers import vision
+
+log = logging.getLogger("layered-design.extract-scene")
 
 _BOX = {
     "x": {"type": "integer"},
@@ -29,7 +33,10 @@ _BOX = {
 SCENE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["canvas", "textLayers", "imageLayers", "overlaySamples"],
+    "required": [
+        "canvas", "textLayers", "imageLayers", "overlaySamples", "shapeLayers",
+        "effects", "components",
+    ],
     "properties": {
         "canvas": {
             "type": "object",
@@ -142,6 +149,79 @@ SCENE_SCHEMA = {
                 },
             },
         },
+        # The simple elements the layout draws itself rather than leaving in the
+        # artwork: CTA backgrounds, contact circles, panels, gradients, dividers.
+        # Nullable rather than optional throughout: strict mode requires every
+        # property to be listed in `required`, so a value that does not apply to
+        # a kind is sent as null.
+        "shapeLayers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "id", "kind", "effect", "x", "y", "width", "height", "zIndex",
+                    "color", "opacity", "radius", "angle", "stops", "borderColor",
+                    "borderWidth", "rotation",
+                ],
+                "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string", "enum": list(schemas.SHAPE_KINDS)},
+                    "effect": {"type": "string"},
+                    **_BOX,
+                    "zIndex": {"type": "integer"},
+                    "color": {"type": ["string", "null"]},
+                    "opacity": {"type": "number"},
+                    "radius": {"type": "integer"},
+                    "angle": {"type": "integer"},
+                    "stops": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["color", "opacity", "position"],
+                            "properties": {
+                                "color": {"type": "string"},
+                                "opacity": {"type": "number"},
+                                "position": {"type": "number"},
+                            },
+                        },
+                    },
+                    "borderColor": {"type": ["string", "null"]},
+                    "borderWidth": {"type": "number"},
+                    "rotation": {"type": "integer"},
+                },
+            },
+        },
+        "effects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "kind", "owner", "note"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string", "enum": list(schemas.EFFECT_KINDS)},
+                    "owner": {"type": "string", "enum": list(schemas.EFFECT_OWNERS)},
+                    "note": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "components": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "kind", "layerId", "pairsWith", "note"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string", "enum": list(schemas.COMPONENT_KINDS)},
+                    "layerId": {"type": "string"},
+                    "pairsWith": {"type": ["string", "null"]},
+                    "note": {"type": ["string", "null"]},
+                },
+            },
+        },
     },
 }
 
@@ -158,46 +238,96 @@ def run(job_id, attempt, asset_id=None):
 
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
 
-    prompt = prompts.render(
-        "extract-scene",
-        width=canvas["width"],
-        height=canvas["height"],
-        fonts=", ".join(conf.APPROVED_FONT_FAMILIES),
-        copy_block=prompts.copy_block(copy_items),
-    )
-
-    raw = vision.analyze(
-        prompt,
-        (concept_bytes,),
-        schema=SCENE_SCHEMA,
-        schema_name="scene_v1",
-        model=conf.SCENE_MODEL,
-        operation_id=f"{job_id}:extract_scene:{attempt}",
-        detail="original",  # Do not change. See the module docstring.
-    )
-
     approved = {i["contentKey"]: i["text"] for i in copy_items}
-    scene = schemas.parse_scene(
-        raw,
-        canvas["width"],
-        canvas["height"],
-        allowed_content_keys=set(approved),
-        allowed_fonts=set(conf.APPROVED_FONT_FAMILIES),
-    )
-    check_copy_is_verbatim(scene, approved)
-    check_required_layers(scene)
+
+    def describe(correction=""):
+        prompt = prompts.render(
+            "extract-scene",
+            width=canvas["width"],
+            height=canvas["height"],
+            fonts=", ".join(conf.APPROVED_FONT_FAMILIES),
+            copy_block=prompts.copy_block(copy_items),
+            correction_block=correction,
+        )
+        raw = vision.analyze(
+            prompt,
+            (concept_bytes,),
+            schema=SCENE_SCHEMA,
+            schema_name="scene_v1",
+            model=conf.SCENE_MODEL,
+            operation_id=f"{job_id}:extract_scene:{attempt}"
+                         + (":retry" if correction else ""),
+            detail="original",  # Do not change. See the module docstring.
+        )
+        scene = schemas.parse_scene(
+            raw,
+            canvas["width"],
+            canvas["height"],
+            allowed_content_keys=set(approved),
+            allowed_fonts=set(conf.APPROVED_FONT_FAMILIES),
+        )
+        check_copy_is_verbatim(scene, approved)
+        check_required_layers(scene)
+        return scene
+
+    try:
+        scene = describe()
+    except InvalidScene as first:
+        # One re-ask, carrying the exact complaint. The per-kind shape rules are
+        # the part a describing model gets wrong most often (a fifth gradient
+        # stop, a chevron with no border), and they are rules the model can obey
+        # once it is told which field broke. A second failure is still the job's
+        # failure: the original message is what the caller sees, because the
+        # retry is an attempt to recover from it rather than a separate fault.
+        log.info(
+            "scene rejected, re-asking once jobId=%s problem=%s", job_id, first.message)
+        try:
+            scene = describe(
+                "CORRECTION: your previous answer was rejected: "
+                f"{first.message}\nReturn the whole document again, fixed. If an "
+                "element cannot satisfy the rule for its kind, leave it out of "
+                "shapeLayers and account for it as a retainedRaster component."
+            )
+        except InvalidScene:
+            raise first from None
 
     document = scene.model_dump(mode="json")
+
+    # The shapes are about to be drawn in CSS from these colours, so they are
+    # measured off the approved concept rather than taken on trust. Geometry is
+    # left as reported: see lib/concept_sample.py.
+    corrections = concept_sample.correct_shape_colors(concept_bytes, document)
+    if corrections:
+        log.info(
+            "shape colours corrected from the concept jobId=%s count=%d",
+            job_id, len(corrections),
+        )
+        document = schemas.parse_scene(          # nothing unvalidated is stored
+            document,
+            canvas["width"],
+            canvas["height"],
+            allowed_content_keys=set(approved),
+            allowed_fonts=set(conf.APPROVED_FONT_FAMILIES),
+        ).model_dump(mode="json")
+
     key = artifacts.artifact_key(job_id, Stage.EXTRACT_SCENE, attempt, "scene.json")
     stored = artifacts.put_json(key, document)
-    jobs.record_artifacts(
-        job_id,
-        Stage.EXTRACT_SCENE,
-        attempt,
+    recorded = {
         # Which concept the scene describes, so FINALIZE can prove every stage
         # used the one that was selected.
-        {"scene": stored["key"], "conceptSha256": artifacts.sha256_hex(concept_bytes)},
-    )
+        "scene": stored["key"],
+        "conceptSha256": artifacts.sha256_hex(concept_bytes),
+        "components": len(document.get("components") or []),
+        "shapeLayers": len(document.get("shapeLayers") or []),
+    }
+    if corrections:
+        # Kept beside the scene rather than inside it: the scene is the design,
+        # and this is the evidence of how it was adjusted.
+        colors_key = artifacts.artifact_key(
+            job_id, Stage.EXTRACT_SCENE, attempt, "scene-colors.json")
+        recorded["colorCorrections"] = artifacts.put_json(
+            colors_key, {"corrections": corrections})["key"]
+    jobs.record_artifacts(job_id, Stage.EXTRACT_SCENE, attempt, recorded)
     return {
         "scene": stored["key"],
         "textLayers": len(scene.textLayers),

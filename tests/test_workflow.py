@@ -170,6 +170,23 @@ def test_a_light_repair_resumes_at_assembly_and_never_touches_an_image_stage():
     assert {"Assemble", "Render", "Review"} <= reach
 
 
+def test_every_repair_result_answers_the_choice_that_reads_it():
+    """A Step Functions choice on an absent path fails the whole execution, and
+    that failure cannot be caught: the job stays RUNNING with no error recorded.
+    Measured live - REPAIR_LIGHT returned no `next` and the execution died at
+    RepairRoute. Every path the choice reads must therefore be answered."""
+    import inspect
+
+    from lib.stages import repair
+
+    paths = {c["Variable"] for c in STATES["RepairRoute"]["Choices"]}
+    assert paths == {"$.repair.next"}, "this test only knows about $.repair.next"
+    field = "next"
+    for function in (repair.light, repair.asset):
+        source = inspect.getsource(function)
+        assert f'"{field}":' in source, f"{function.__name__} must answer {field!r}"
+
+
 def test_an_asset_repair_regenerates_only_the_named_asset_then_revalidates():
     assert STATES["RepairAsset"]["Parameters"]["operation"] == "REPAIR_ASSET"
     routes = {c["StringEquals"]: c["Next"] for c in STATES["RepairRoute"]["Choices"]}

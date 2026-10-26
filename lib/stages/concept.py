@@ -31,7 +31,8 @@ import json
 import logging
 
 from lib import (
-    artifacts, edit_mask, jobs, policy_context, prompts, reference, review_policy, telemetry,
+    artifacts, direction_policy, edit_mask, jobs, policy_context, prompts, reference,
+    review_policy, telemetry,
 )
 from lib.errors import AssetInvalid, Stage
 from lib.providers import image
@@ -143,6 +144,15 @@ def _brand_block(brief, brand):
     )
 
 
+def _direction(policy, request, copy_items):
+    """The resolved direction, from the policy document this concept works under.
+
+    Resolving it again only matters for a job whose policy predates the direction
+    fields; the policy version bump makes that a fresh policy in practice.
+    """
+    return policy.get("direction") or direction_policy.resolve(request, copy_items)
+
+
 def _generate(job_id, attempt, request, policy, analysis, copy_items, placements):
     canvas = request["canvas"]
     brief = request["brief"]
@@ -151,6 +161,10 @@ def _generate(job_id, attempt, request, policy, analysis, copy_items, placements
     prompt = prompts.render(
         "concept",
         policy_block=policy_block(policy, analysis),
+        # Resolved once in ANALYZE_REFERENCE and carried in the policy document,
+        # so the concept is composed in the right direction from the start rather
+        # than mirrored afterwards.
+        direction_block=direction_policy.prompt_block(_direction(policy, request, copy_items)),
         width=canvas["width"],
         height=canvas["height"],
         post=brief["post"],
@@ -196,6 +210,7 @@ def _correct(job_id, attempt, request, policy, analysis, copy_items, placements,
     prompt = prompts.render(
         "concept-correction",
         policy_block=policy_block(policy, analysis),
+        direction_block=direction_policy.prompt_block(_direction(policy, request, copy_items)),
         width=canvas["width"],
         height=canvas["height"],
         copy_block=prompts.copy_block(copy_items),

@@ -84,6 +84,70 @@ TYPOGRAPHY_TARGET = {"text": TEXT_TYPOGRAPHY}
 LAYOUT_TARGET = {"text": _GEOMETRY, "shape": SHAPE_PROPERTIES, "image": IMAGE_PROPERTIES}
 
 
+#: How a property is described to the reviewer, where the name alone is not
+#: enough to use it correctly. Everything else is listed by name and bounds.
+_PROPERTY_NOTES = {
+    # The installed families, from the same setting the executor validates
+    # against: a reviewer that asks for a face nobody has is a finding no repair
+    # can apply, and the whole design fails for one font name.
+    "fontFamily": "only " + " or ".join(conf.APPROVED_FONT_FAMILIES),
+    "fill": "transparent only for hollow lettering",
+    "strokeWidth": "outline thickness in px",
+    "letterSpacing": "extra space between letters in px",
+    "gradientStrength": "opacity of a gradient's darkest end; never a CSS string",
+    "objectPosition": 'e.g. "center", "50% 20%"',
+    "rotation": "a multiple of 45 degrees",
+    "angle": "gradient direction in CSS degrees; 180 is top to bottom",
+}
+
+#: Which kinds of layer each heading covers, for the prompt.
+_KIND_LABEL = {"text": "text layers", "shape": "shapes", "image": "image layers"}
+
+
+def supported_properties(target):
+    """Every property name a `target` correction may set, on any kind of layer."""
+    table = TYPOGRAPHY_TARGET if target == "typography" else LAYOUT_TARGET
+    names = set()
+    for properties in table.values():
+        names |= set(properties)
+    return names
+
+
+def property_help(target):
+    """The properties a `target` correction may set, as prompt text.
+
+    Generated from the same table the executor enforces, so the reviewer is never
+    told about a property that would be rejected, and a property added here is
+    offered without a second edit to the prompt. A reviewer asking for something
+    outside this list is refused by name rather than silently ignored.
+    """
+    table = TYPOGRAPHY_TARGET if target == "typography" else LAYOUT_TARGET
+    lines = []
+    for kind, properties in table.items():
+        names = []
+        for name, spec in sorted(properties.items()):
+            parts = [p for p in (_PROPERTY_NOTES.get(name), _bounds(spec)) if p]
+            names.append(f"{name} ({'; '.join(parts)})" if parts else name)
+        lines.append(f"on {_KIND_LABEL[kind]}: " + ", ".join(names))
+    return "\n      ".join(lines)
+
+
+def _bounds(spec):
+    """A property's accepted values, as prompt text.
+
+    Read from the specification the executor validates against. Measured live: a
+    review asked for a letterSpacing of -12 where -10 is the limit, and the whole
+    design failed because one number in one correction was out of range.
+    """
+    kind, argument = spec
+    if kind in ("int", "float") and argument:
+        low, high = argument
+        return f"{low} to {high}"
+    if kind == "enum":
+        return " or ".join(f'"{value}"' for value in argument)
+    return None
+
+
 def layer_kind(scene, layer_id):
     """("text"|"shape"|"image", layer) for an id, or (None, None)."""
     for kind, key in (("text", "textLayers"), ("shape", "shapeLayers"), ("image", "imageLayers")):
@@ -242,13 +306,28 @@ SHAPE_PRESETS = {
 }
 
 
-def add_shape(scene, preset, *, effect_id=None):
+def shape_id_for(effect_id):
+    """The layer id `add_shape` gives the shape that draws `effect_id`.
+
+    Named here so a repair can say which element its addition will touch without
+    applying it first.
+    """
+    return f"shape-{effect_id}"
+
+
+def add_shape(scene, preset, *, effect_id=None, take_over=False):
     """Return a copy of `scene` with one preset shape added and its effect declared.
 
     Refuses when it would create a second owner for the effect (an existing effect
     of the same singleton kind, wherever it is owned) or when there is no stacking
     slot between the photograph and the content above it. Both are InvalidScene,
     which routing reports as an unresolved repair rather than painting twice.
+
+    `take_over` is for the one case where that refusal is wrong: a review has
+    found that the asset said to own the effect does not actually contain it. The
+    effect is then moved to the layout rather than declared twice. It is never
+    inferred from the scene - a photograph that really does carry its gradient
+    looks identical from here - so only a finding can ask for it.
     """
     if not conf.CODE_SHAPES_ENABLED:
         raise InvalidScene(
@@ -261,12 +340,26 @@ def add_shape(scene, preset, *, effect_id=None):
     patched = copy.deepcopy(scene)
     effects = patched.setdefault("effects", [])
     shapes = patched.setdefault("shapeLayers", [])
-    if effect_kind in schemas.SINGLETON_EFFECTS and any(e["kind"] == effect_kind for e in effects):
-        owner = next(e["owner"] for e in effects if e["kind"] == effect_kind)
+    drawn = {s.get("effect") for s in shapes}
+    same_kind = [e for e in effects if e["kind"] == effect_kind]
+    taken_over = (
+        next((e for e in same_kind if e["id"] not in drawn), None)
+        if take_over else None
+    )
+    if effect_kind in schemas.SINGLETON_EFFECTS and same_kind and taken_over is None:
+        owner = same_kind[0]["owner"]
         raise InvalidScene(
             f"The design already has a {effect_kind} owned by the {owner}; adding "
             "another would draw it twice."
         )
+    if taken_over is not None:
+        if effect_id and effect_id != taken_over["id"]:
+            raise InvalidScene(
+                f"The design's {effect_kind} is {taken_over['id']!r}; adding "
+                f"{effect_id!r} as well would draw it twice."
+            )
+        effect_id = taken_over["id"]
+        effects.remove(taken_over)
     effect_id = effect_id or effect_kind
     if any(e["id"] == effect_id for e in effects):
         raise InvalidScene(f"Effect {effect_id!r} already exists.")
@@ -292,7 +385,7 @@ def add_shape(scene, preset, *, effect_id=None):
     horizontal = edge in ("left", "right")
     x = width - band if edge == "right" else 0
     y = height - band if edge == "bottom" else 0
-    shape_id = f"shape-{effect_id}"
+    shape_id = shape_id_for(effect_id)
     if any(l["id"] == shape_id for l in shapes) or layer_kind(patched, shape_id)[0]:
         raise InvalidScene(f"Layer id {shape_id!r} is already in use.")
     # Strong enough to carry white text over a busy photograph; the dark end sits at
@@ -315,4 +408,93 @@ def add_shape(scene, preset, *, effect_id=None):
     }
     shapes.append(shape)
     effects.append({"id": effect_id, "kind": effect_kind, "owner": "layout", "note": None})
+    if patched.get("components"):
+        # The plan has to stay complete: a shape with no entry in it is read as a
+        # component nobody decomposed, and the patched scene is rejected.
+        patched["components"].append({
+            "id": f"component-{shape_id}", "kind": "editableShape",
+            "layerId": shape_id, "pairsWith": None,
+            "note": f"Added by the layout to draw {effect_id}.",
+        })
     return patched
+
+
+def rasterize_shapes(scene, layer_ids, owner, reason):
+    """Give named shape layers back to the artwork that still contains them.
+
+    The reverse of extraction, and the only honest answer when the bounded
+    overlay repair cannot separate a decorative shape: the element keeps its
+    appearance, the asset that still holds it becomes its declared owner, and
+    the layout stops drawing a second copy. The plan is kept complete - the
+    component entry moves onto the asset that carries it - so nothing becomes
+    unaccounted for.
+
+    Only shapes may be surrendered, and only ones the caller has established are
+    not required to be editable (lib/validate_assets.mandatory_component_ids).
+    """
+    patched = copy.deepcopy(scene)
+    wanted = set(layer_ids)
+    present = {s["id"] for s in patched.get("shapeLayers") or []}
+    missing = wanted - present
+    if missing:
+        raise InvalidScene(
+            "Cannot give back shapes the scene does not have: "
+            + ", ".join(sorted(missing))
+        )
+    surrendered = [s for s in patched["shapeLayers"] if s["id"] in wanted]
+    patched["shapeLayers"] = [s for s in patched["shapeLayers"] if s["id"] not in wanted]
+
+    kept_effects = {s.get("effect") for s in patched["shapeLayers"]}
+    given_effects = {s.get("effect") for s in surrendered} - kept_effects
+    for effect in patched.get("effects") or []:
+        if effect["id"] in given_effects:
+            effect["owner"] = owner
+            effect["note"] = reason
+
+    carrier = _carrier(patched, owner)
+    notes = []
+    for component in list(patched.get("components") or []):
+        if component["layerId"] not in wanted:
+            continue
+        shape = next(s for s in surrendered if s["id"] == component["layerId"])
+        notes.append(f"{shape['kind']} {shape['id']}")
+        patched["components"].remove(component)
+    if notes and carrier is not None:
+        existing = carrier.get("note") or ""
+        carrier["note"] = (
+            f"{existing} Retained in this asset rather than as editable shapes "
+            f"({reason}): {', '.join(notes)}."
+        ).strip()[:800]
+
+    # A sample that says the photograph shows through where the surrendered shape
+    # is cannot survive the surrender: that area is the shape, and the asset now
+    # owns it. Kept for the asset that did not take it over, so the opposite
+    # asset is still held to the same expectation.
+    if owner == "overlay":
+        patched["overlaySamples"] = [
+            sample for sample in patched.get("overlaySamples") or []
+            if not (sample["kind"] == "transparent"
+                    and any(_within(shape, sample) for shape in surrendered))
+        ]
+    return patched
+
+
+def _within(outer, inner, coverage=0.8):
+    """Does `outer` hold at least `coverage` of `inner`'s area?"""
+    width = min(outer["x"] + outer["width"], inner["x"] + inner["width"]) \
+        - max(outer["x"], inner["x"])
+    height = min(outer["y"] + outer["height"], inner["y"] + inner["height"]) \
+        - max(outer["y"], inner["y"])
+    area = max(1, inner["width"] * inner["height"])
+    return width > 0 and height > 0 and (width * height) / area >= coverage
+
+
+def _carrier(scene, owner):
+    """The component entry for the asset that keeps a surrendered shape."""
+    layers = {l["id"]: l for l in scene.get("imageLayers") or []}
+    want = "background" if owner == "photo" else "decoration"
+    for component in scene.get("components") or []:
+        layer = layers.get(component["layerId"])
+        if layer is not None and layer.get("type") == want:
+            return component
+    return None

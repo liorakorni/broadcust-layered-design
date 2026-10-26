@@ -18,6 +18,8 @@ Always-permitted adaptations. These are documented exceptions, never violations:
 
 {severity_block}
 
+{direction_block}
+
 Reference anchors recorded earlier (normalized boxes, 0..1 from the top-left):
 {reference_anchors}
 
@@ -62,6 +64,13 @@ How to review:
    genuinely cannot fit the preserved layout even with localized fitting, and
    give a concise reason. Otherwise set it to false with a null reason.
 
+8. compositionDirectionOk: true when image 2 is composed in the direction stated
+   under DIRECTION above - the column positions and reading order it describes -
+   and false when it runs the other way. Judge the COMPOSITION, not the text: a
+   right-to-left design has its text column on the right. A mirrored photograph,
+   a reversed logo or a phone number written backwards is a separate defect:
+   report it as an issue, and still answer this question about the layout.
+
 Return strict JSON: mode (echo "{mode}"), checks, copyChecks, documentedExceptions,
-issues, suggestions and constraintConflict. Do not return a pass/fail flag: the
-service decides that from what you report.
+issues, suggestions, constraintConflict and compositionDirectionOk. Do not return
+a pass/fail flag: the service decides that from what you report.

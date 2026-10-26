@@ -20,9 +20,12 @@ from __future__ import annotations
 from lib import review_policy
 
 #: 2.0: content-neutral structural constraints, `reviewStrictness` and the
-#: severity policy, planned copy placements in the reference analysis. A 1.0
-#: policy or analysis is never reused under 2.0 (see lib/policy_context.py).
-POLICY_VERSION = "2.0"
+#: severity policy, planned copy placements in the reference analysis.
+#: 3.0: the resolved direction policy (layout, text, reference-layout) is part of
+#: the document, so a concept generated under 2.0 - which could not have been
+#: composed right to left from the start - is never reused here.
+#: A policy or analysis from an earlier version is never reused (lib/policy_context.py).
+POLICY_VERSION = "3.0"
 
 STRICT = "strict-adherence"
 CLOSE = "close-adaptation"
@@ -140,11 +143,17 @@ def mode_for(design_freedom: int) -> str:
 def derive_reference_policy(
     design_freedom: int,
     review_strictness: str = review_policy.DEFAULT_STRICTNESS,
+    direction: dict | None = None,
 ) -> dict:
     """Return the versioned policy for a validated 0..100 integer.
 
     `review_strictness` is independent of `design_freedom`: the first governs how
     freely the concept is generated, the second how its differences are judged.
+
+    `direction` is the resolved direction policy (lib/direction_policy.py). It
+    travels in the same document so one versioned artifact describes adherence,
+    strictness and direction, and a concept cannot be generated under one
+    direction and judged under another.
     """
     if (
         isinstance(design_freedom, bool)
@@ -165,4 +174,5 @@ def derive_reference_policy(
         "mayChange": list(_MAY_CHANGE[mode]),
         "documentedExceptions": list(DOCUMENTED_EXCEPTIONS),
         "instruction": _INSTRUCTIONS[mode],
+        "direction": dict(direction) if direction else None,
     }

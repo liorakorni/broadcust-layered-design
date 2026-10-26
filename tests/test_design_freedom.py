@@ -97,7 +97,7 @@ def test_band_boundaries(value, mode):
     policy = reference_policy.derive_reference_policy(value)
     assert policy["mode"] == mode
     assert policy["designFreedom"] == value
-    assert policy["policyVersion"] == "2.0"
+    assert policy["policyVersion"] == reference_policy.POLICY_VERSION
 
 
 @pytest.mark.parametrize("value", [-1, 101, True, 10.5, "10", None])
@@ -177,7 +177,7 @@ def test_direct_and_bedrock_paths_preserve_the_same_effective_value(start_payloa
     for job_id in (direct_id, agent_id):
         job = api["table"].items[f"JOB#{job_id}"]
         assert job["designFreedom"] == 40
-        assert job["policyVersion"] == "2.0"
+        assert job["policyVersion"] == reference_policy.POLICY_VERSION
 
 
 def test_an_omitted_value_is_persisted_as_zero(start_payload, api):
@@ -345,7 +345,7 @@ def test_an_approved_concept_is_frozen_with_its_review(pipeline):
     assert frozen["key"] == job_of(pipeline)["artifacts"][Stage.CONCEPT]["concept"]
     assert frozen["reviewKey"] == out["review"]
     assert frozen["designFreedom"] == 0
-    assert frozen["policyVersion"] == "2.0"
+    assert frozen["policyVersion"] == reference_policy.POLICY_VERSION
     review = artifacts.get_json(pipeline["jobId"], out["review"])
     assert review["conceptSha256"] == frozen["sha256"]
 
@@ -543,8 +543,12 @@ def test_separation_edits_the_frozen_concept_not_the_latest(pipeline, monkeypatc
 
 
 def test_review_concept_failures_are_not_attributed_to_concept():
-    assert handler_stage._stage_from_message("x [REVIEW_CONCEPT]") == Stage.REVIEW_CONCEPT
-    assert handler_stage._stage_from_message("x [CONCEPT]") == Stage.CONCEPT
+    assert handler_stage._stage_from_message("x [REVIEW_CONCEPT]") == (
+        Stage.REVIEW_CONCEPT, None)
+    assert handler_stage._stage_from_message("x [CONCEPT]") == (Stage.CONCEPT, None)
+    # A repair operation is reported beside its stage, not instead of it.
+    assert handler_stage._stage_from_message("x [REPAIR_LIGHT in REVIEW]") == (
+        Stage.REVIEW, "REPAIR_LIGHT")
 
 
 def test_a_concept_repair_failure_is_recorded_against_review_concept(pipeline):
@@ -589,10 +593,10 @@ def test_result_and_qa_carry_the_effective_value_and_policy(pipeline):
     job = run_pipeline(pipeline)
     result = artifacts.get_json(pipeline["jobId"], job["resultKey"])
     assert result["designFreedom"] == 75
-    assert result["policyVersion"] == "2.0"
+    assert result["policyVersion"] == reference_policy.POLICY_VERSION
     qa = result["qa"]
     assert qa["designFreedom"] == 75
-    assert qa["policyVersion"] == "2.0"
+    assert qa["policyVersion"] == reference_policy.POLICY_VERSION
     assert qa["conceptRounds"] == 0
     assert qa["conceptReview"]["passed"] is True
     assert qa["conceptReview"]["mode"] == "broad-inspiration"
@@ -740,4 +744,4 @@ def test_an_exhausted_html_correction_is_recorded_against_review(pipeline):
         handler_stage.handler(
             {"jobId": job_id, "stage": Stage.REVIEW, "attempt": 1,
              "assetId": None, "operation": "CORRECT"}, None)
-    assert handler_stage._stage_from_message(exc.value.message) == Stage.REVIEW
+    assert handler_stage._stage_from_message(exc.value.message) == (Stage.REVIEW, None)

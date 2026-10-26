@@ -14,7 +14,7 @@ import pytest
 
 import conf
 import handler_stage
-from lib import artifacts, candidates, design_edit, design_state, jobs, telemetry
+from lib import artifacts, assemble_html, candidates, design_edit, design_state, jobs, telemetry
 from lib import content_check
 from lib.errors import (
     CorrectionExhausted, DesignNotEditable, IdempotencyConflict, InvalidEdit,
@@ -335,17 +335,306 @@ def test_a_missing_gradient_is_added_once_in_code_and_not_painted_into_the_photo
     assert snapshot_of(script)["assets"]["entries"] == first["assets"]["entries"]
 
 
-def test_an_existing_gradient_is_never_duplicated_by_a_repair(script):
+def test_a_gradient_a_shape_already_draws_is_never_duplicated_by_a_repair(script):
+    """Two owners is the defect this prevents: the layout drawing the darkening
+    twice. (An effect an *asset* claims but nothing draws is a different case:
+    the review has seen the render without it, and the layout takes it over.)"""
     from lib import repair_routing
 
     scene = copy.deepcopy(SCENE)
-    scene["effects"] = [{"id": "baked", "kind": "readabilityGradient", "owner": "photo",
-                         "note": "dark gradient painted into the photograph"}]
+    scene["effects"] = [{"id": "fade", "kind": "readabilityGradient",
+                         "owner": "layout", "note": None}]
+    scene["shapeLayers"] = [{
+        "id": "s_fade", "type": "shape", "kind": "gradient", "effect": "fade",
+        "x": 0, "y": 512, "width": 1024, "height": 512, "zIndex": 1,
+        "color": None, "opacity": 1.0, "radius": 0, "angle": 180,
+        "stops": [{"color": "#000000", "opacity": 0.8, "position": 0.0},
+                  {"color": "#000000", "opacity": 0.0, "position": 1.0}],
+        "borderColor": None, "borderWidth": 0.0, "rotation": 0}]
     record = repair_routing.route_issue(GRADIENT_MISSING, {
         "scene": scene, "copyKeys": set(), "assetForLayer": {}, "assetIds": set(),
         "fonts": conf.APPROVED_FONT_FAMILIES, "conceptJustified": False})
     assert record["route"] == "unresolved"
     assert any("already has a readabilityGradient" in p for p in record["problems"])
+
+
+def test_an_asset_owned_gradient_the_render_lacks_is_taken_over_once(script):
+    """Measured on a live run: the scene said the photograph carried the
+    darkening, the separated photograph did not, and the design failed over one
+    CSS gradient."""
+    from lib import repair_routing
+
+    record = repair_routing.route_issue(GRADIENT_MISSING, {
+        "scene": _baked_gradient_scene(), "copyKeys": set(), "assetForLayer": {},
+        "assetIds": set(), "fonts": conf.APPROVED_FONT_FAMILIES,
+        "conceptJustified": False})
+
+    assert record["route"] == "light"
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-bottom", "effect": "effect-photo-darkening",
+         "takeOver": True}]
+
+
+def _baked_gradient_scene():
+    scene = copy.deepcopy(SCENE)
+    scene["effects"] = [
+        {"id": "effect-photo-darkening", "kind": "readabilityGradient",
+         "owner": "photo", "note": "dark gradient painted into the photograph"}]
+    return scene
+
+
+def _route(issue_, scene):
+    from lib import repair_routing
+
+    return repair_routing.route_issue(issue_, {
+        "scene": scene, "copyKeys": set(), "assetForLayer": {}, "assetIds": set(),
+        "fonts": conf.APPROVED_FONT_FAMILIES, "conceptJustified": False})
+
+
+#: What a live review actually returned when the separated layers turned out not
+#: to contain the darkening the scene said the photograph owned: properties on
+#: the effect's id, which is not a layer and never was.
+DARKENING_LOST = issue(
+    "MISSING_RIGHT_DARKENING", target="layout", affected=["effect-photo-darkening"],
+    constraints=[("effect-photo-darkening", "angle", "90"),
+                 ("effect-photo-darkening", "gradientStrength", "0.95")],
+)
+
+
+def test_a_correction_aimed_at_an_undrawn_effect_becomes_the_shape_that_draws_it():
+    record = _route(DARKENING_LOST, _baked_gradient_scene())
+
+    assert record["route"] == "light"
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-left", "effect": "effect-photo-darkening",
+         "takeOver": True}]
+    # The translation is recorded, not silent: it says what was asked and why it
+    # is being done differently.
+    assert record["translated"]["from"][0]["property"] == "angle"
+    assert "no shape draws it" in record["translated"]["reason"]
+
+
+def test_an_undrawn_effect_is_taken_over_by_the_layout_exactly_once():
+    from lib import scene_patch
+    from lib.errors import InvalidScene
+
+    scene = _baked_gradient_scene()
+    taken = scene_patch.add_shape(
+        scene, "gradient-right", effect_id="effect-photo-darkening", take_over=True)
+
+    assert [e["owner"] for e in taken["effects"]] == ["layout"]
+    assert [s["effect"] for s in taken["shapeLayers"]] == ["effect-photo-darkening"]
+    # And a second attempt now finds a shape drawing it, so it is refused.
+    with pytest.raises(InvalidScene, match="already has a readabilityGradient"):
+        scene_patch.add_shape(taken, "gradient-right", take_over=True)
+
+
+#: What a live review returned when the photograph came back without the
+#: readability shading the scene said it carried: the right complaint, in words,
+#: naming nothing - because the gradient it wanted did not exist to be named.
+SHADING_MISSING = {
+    **issue("MISSING_READABILITY_SHADING", target="layout", affected=[]),
+    "message": ("The dark text field and its separation from the right-side "
+                "photograph. Fix: restore the readability shading with a "
+                "code-owned dark gradient, keeping the subject visible."),
+}
+
+
+def test_a_shading_finding_that_names_nothing_still_draws_the_undrawn_gradient():
+    record = _route(SHADING_MISSING, _baked_gradient_scene())
+
+    assert record["route"] == "light"
+    # The edge comes from the scene's own geometry rather than the finding's
+    # prose: the fixture's words are centred horizontally and sit high, so the
+    # darkening goes under them at the top.
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-top", "effect": "effect-photo-darkening",
+         "takeOver": True}]
+
+
+def test_the_unnamed_shading_follows_the_side_the_words_are_on():
+    scene = _baked_gradient_scene()
+    for layer in scene["textLayers"]:          # the whole column moved right
+        layer["x"] = 700
+
+    record = _route(SHADING_MISSING, scene)
+
+    assert record["patch"]["addShapes"][0]["preset"] == "gradient-right"
+
+
+def test_an_add_request_without_a_preset_still_draws_the_effect():
+    """Measured live: the review did name the effect - affectedElementIds
+    ["add:effect-photo-darkening"] - but described the gradient in prose instead
+    of naming a preset. Half a request is still a request; the preset follows
+    from the scene."""
+    half = {**issue("MISSING_TEXT_SIDE_DARKENING", target="layout",
+                    affected=["add:effect-photo-darkening"]),
+            "message": "Restore the darkening above the photograph."}
+
+    record = _route(half, _baked_gradient_scene())
+
+    assert record["route"] == "light"
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-top", "effect": "effect-photo-darkening",
+         "takeOver": True}]
+
+
+def test_an_add_request_naming_its_own_effect_adds_that_effect():
+    """The review may also invent the id when the design declares no darkening."""
+    scene = copy.deepcopy(SCENE)
+    scene["effects"] = []
+    half = {**issue("MISSING_READABILITY_SHADING", target="layout",
+                    affected=["add:text-field-darkening"]),
+            "message": "Add a dark gradient behind the copy."}
+
+    record = _route(half, scene)
+
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-top", "effect": "text-field-darkening",
+         "takeOver": False}]
+
+
+def test_a_review_that_names_a_preset_itself_is_left_alone():
+    """The documented form is applied as written, not re-derived."""
+    spelled_out = issue(
+        "MISSING_READABILITY_SHADING", target="layout",
+        affected=["add:readabilityGradient"],
+        constraints=[("add:readabilityGradient", "addShape", "gradient-bottom")])
+    scene = copy.deepcopy(SCENE)
+    scene["effects"] = []
+
+    record = _route(spelled_out, scene)
+
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-bottom", "effect": "readabilityGradient",
+         "takeOver": False}]
+    assert "translated" not in record
+
+
+def test_the_reviewer_is_told_what_each_property_will_accept():
+    """Measured live twice: a review asked for 'Open Sans Hebrew Condensed', and
+    another for a letterSpacing of -12 where -10 is the limit. Each time the
+    repair refused a value no one has or no one allows, and the design failed over
+    one number. The prompt now carries the fonts and the bounds, generated from
+    the same table the executor validates against."""
+    from lib import scene_patch
+
+    help_text = scene_patch.property_help("typography")
+
+    assert "fontFamily (only " in help_text
+    for family in conf.APPROVED_FONT_FAMILIES:
+        assert family in help_text
+    low, high = scene_patch.TEXT_TYPOGRAPHY["letterSpacing"][1]
+    assert f"{low} to {high}" in help_text
+    assert '"rtl" or "ltr"' in help_text          # enums, not only ranges
+
+
+def test_a_shading_finding_adds_the_gradient_a_design_never_declared():
+    """Measured live: the review asked for a left-to-right darkening on a design
+    whose scene declares no readabilityGradient at all - nothing to take over, so
+    the answer is the new shape, not a failed job."""
+    scene = copy.deepcopy(SCENE)
+    scene["effects"] = []
+
+    record = _route(SHADING_MISSING, scene)
+
+    assert record["route"] == "light"
+    assert record["patch"]["addShapes"] == [
+        {"preset": "gradient-top", "effect": "readabilityGradient",
+         "takeOver": False}]
+    assert "declares no readabilityGradient" in record["translated"]["reason"]
+
+
+def test_a_shading_finding_is_dropped_when_a_shape_already_draws_one():
+    """The design already darkens; a second gradient would just darken twice."""
+    scene = copy.deepcopy(SCENE)
+    scene["effects"] = [{"id": "effect-readability", "kind": "readabilityGradient",
+                         "owner": "layout", "note": None}]
+    scene["shapeLayers"] = [dict(
+        id="shade", type="shape", kind="gradient", effect="effect-readability",
+        x=0, y=0, width=1024, height=400, zIndex=1, color=None, opacity=1.0,
+        radius=0, angle=180, borderColor=None, borderWidth=0.0, rotation=0,
+        stops=[{"color": "#000000", "opacity": 0.9, "position": 0.0},
+               {"color": "#000000", "opacity": 0.0, "position": 1.0}])]
+
+    record = _route(SHADING_MISSING, scene)
+
+    assert record["route"] == "unresolved"
+
+
+def test_a_layout_finding_about_something_else_is_still_unroutable():
+    """Only the words of the finding may send it to the undrawn effect; otherwise
+    every unnamed layout complaint would be answered with a gradient."""
+    vague = {**issue("CROWDED_HEADER", target="layout", affected=[]),
+             "message": "The header feels crowded and the margins are tight."}
+
+    record = _route(vague, _baked_gradient_scene())
+
+    assert record["route"] == "unresolved"
+    assert any("must name the elements" in p for p in record["problems"])
+
+
+def test_a_shading_finding_is_not_routed_when_two_effects_are_undrawn():
+    """With more than one candidate there is no single reading, so it stays
+    unresolved rather than guessing which effect was meant."""
+    scene = _baked_gradient_scene()
+    scene["effects"].append(
+        {"id": "effect-text-field", "kind": "readabilityGradient", "owner": "decoration",
+         "note": "a second darkening, also drawn by nothing"})
+
+    record = _route(SHADING_MISSING, scene)
+
+    assert record["route"] == "unresolved"
+
+
+def test_a_shape_the_repair_adds_is_entered_in_the_decomposition_plan():
+    """Measured live: the repair added the gradient shape, the plan still did not
+    mention it, and the patched scene was rejected as an incomplete
+    decomposition - failing the job the repair existed to save."""
+    from lib import schemas, scene_patch
+
+    scene = _planned_scene()
+    taken = scene_patch.add_shape(
+        scene, "gradient-right", effect_id="effect-photo-darkening", take_over=True)
+
+    schemas.parse_scene(taken, CANVAS["width"], CANVAS["height"])
+    entry = next(c for c in taken["components"]
+                 if c["layerId"] == "shape-effect-photo-darkening")
+    assert entry["kind"] == "editableShape"
+
+
+def _planned_scene():
+    """A baked-gradient scene carrying a decomposition plan, as live ones do."""
+    scene = _baked_gradient_scene()
+    scene["textLayers"] = [l for l in scene["textLayers"]
+                           if not l["contentKey"].startswith("contact.")]
+    scene["components"] = [
+        {"id": "c-photo", "kind": "photo", "layerId": "l_bg",
+         "pairsWith": None, "note": None},
+        {"id": "c-deco", "kind": "retainedRaster", "layerId": "l_deco",
+         "pairsWith": None, "note": None},
+    ]
+    return scene
+
+
+def test_a_baked_gradient_is_not_taken_over_without_a_finding():
+    """A photograph that really carries its gradient looks the same from here, so
+    nothing infers the take-over from the scene alone."""
+    from lib import scene_patch
+    from lib.errors import InvalidScene
+
+    with pytest.raises(InvalidScene, match="already has a readabilityGradient"):
+        scene_patch.add_shape(_baked_gradient_scene(), "gradient-bottom")
+
+
+def test_a_correction_naming_a_layer_that_does_not_exist_is_still_unresolved():
+    bad = issue("X", target="layout", affected=["no-such-thing"],
+                constraints=[("no-such-thing", "x", "10")])
+
+    record = _route(bad, _baked_gradient_scene())
+
+    assert record["route"] == "unresolved"
+    assert any("does not exist" in p for p in record["problems"])
 
 
 # --- classification is validated before anything is routed ----------------------
@@ -723,6 +1012,49 @@ def test_export_renders_the_edited_design_once_on_request_and_calls_no_image_mod
     assert again["htmlHash"] == out["htmlHash"]
     with pytest.raises(StaleDesignVersion):
         export_design.export(script["jobId"], version=1)
+
+
+def test_an_export_round_trip_preserves_decoration_markers_ids_and_styles(script):
+    """The in-repo proxy for the editor's save and reopen.
+
+    A decoration has to survive being stored, edited and exported with its marker,
+    its element id and its styles intact, or the editor loses the layer. The
+    native editor check stays pending until the editor is available.
+    """
+    import re
+
+    from lib.stages import export_design
+
+    script["script"].append([GRADIENT_MISSING])
+    first_pass(script)
+    drive_remaining(script)
+    delivered = html_of(script)
+    shape_id = scene_of(script)["shapeLayers"][0]["id"]
+    element_id = assemble_html.shape_element_ids(scene_of(script))[shape_id]
+
+    out = export_design.export(script["jobId"], owner_scope="owner-1")
+    decoration = lambda doc: re.search(
+        rf'<div class="words (d\d+)" id="{element_id}"([^>]*)>', doc)
+    assert decoration(delivered).groups() == decoration(out["html"]).groups()
+    assert 'data-role="decoration"' in decoration(out["html"]).group(2)
+    assert "data-shape=" in decoration(out["html"]).group(2)
+    assert "linear-gradient" in out["html"]
+    assert out["html"] == delivered                      # nothing was edited yet
+
+    # Restyle the decoration the way the editor would, then export again.
+    edited = design_edit.update(
+        {"jobId": script["jobId"], "requestId": "edit-decoration",
+         "expectedVersion": int(job_of(script)["designVersion"]),
+         "changes": {"layout": {shape_id: {"opacity": "0.5"}}}},
+        "owner-1",
+    )
+    assert edited["changed"] is True and edited["imageGenerationCalls"] == 0
+    reopened = export_design.export(script["jobId"], owner_scope="owner-1")["html"]
+    kept = decoration(reopened)
+    assert kept.group(1) == decoration(delivered).group(1)        # same dNNNN class
+    assert 'data-role="decoration"' in kept.group(2)
+    assert "opacity:0.5" in kept.group(2)
+    assert '<div class="text"></div>' in reopened
 
 
 # --- Phase B: the layout-first flow ---------------------------------------------------
@@ -1109,3 +1441,208 @@ def test_metric_writes_alias_the_reserved_word_metrics(monkeypatch):
     jobs.add_metric("job-1", "imageCalls")
     assert seen["UpdateExpression"] == "ADD #root.#m :n"
     assert seen["ExpressionAttributeNames"] == {"#root": "metrics", "#m": "imageCalls"}
+
+
+# --- a repair must change the design, and only what was asked -------------------
+
+
+def test_the_reviewer_prompt_lists_exactly_the_supported_properties(script):
+    """One table. A property the reviewer is offered must be one the executor applies."""
+    from lib import prompts, scene_patch
+
+    first_pass(script)
+    prompt = next(c["prompt"] for c in reversed(script["calls"]["vision"])
+                  if c["schema"] == "review_v2")
+
+    supported = set()
+    for target in ("typography", "layout"):
+        # The block the executor generates is the block the reviewer is given.
+        assert scene_patch.property_help(target) in prompt
+        supported |= scene_patch.supported_properties(target)
+
+    for name in supported:
+        assert name in prompt
+    assert "gradientStrength" in supported          # translated, never ignored
+    # The old hand-written list is gone, so it cannot drift from the table.
+    assert "strokeWidth (px)" not in prompts.load("review")
+    assert "{typography_properties}" in prompts.load("review")
+
+
+def test_a_no_op_patch_is_reported_as_no_progress_not_success(script):
+    """A constraint that sets a property to the value it already has fixes nothing."""
+    title = next(l for l in SCENE["textLayers"] if l["id"] == "t_title")
+    script["script"].append([issue(
+        "TITLE_TOO_SMALL", target="typography", affected=["t_title"],
+        constraints=[("t_title", "fontSize", str(title["fontSize"]))],
+    )])
+    first_pass(script)
+    with pytest.raises(RepairNoProgress) as raised:
+        op(script, "REPAIR_LIGHT", 1)
+    assert "changed nothing" in raised.value.message
+    assert "TITLE_TOO_SMALL" in raised.value.message
+    # Nothing committed: no new design version, no spent budget.
+    assert job_of(script)["designVersion"] == snapshot_of(script)["version"]
+    assert int(job_of(script).get("repairs_typography", 0)) == 0
+
+
+def test_a_patch_that_does_not_reach_the_css_is_reported_as_no_progress(script):
+    """The scene is only assembly's input; the delivered design is the HTML.
+
+    A background layer's box is one such field: the assembler sizes the
+    photograph from the canvas, so moving it changes the scene and nothing that
+    is rendered.
+    """
+    from lib.stages import repair as repair_stage
+
+    first_pass(script)
+    job = job_of(script)
+    before = scene_of(script)
+    after = copy.deepcopy(before)
+    background = next(l for l in after["imageLayers"] if l["type"] == "background")
+    background["x"] += 40
+
+    routed = [{"code": "PHOTO_OFF_CENTRE", "target": "layout",
+               "patch": {"layers": {background["id"]: {"x": background["x"]}}}}]
+    with pytest.raises(RepairNoProgress) as raised:
+        repair_stage.verify_changed(before, after, routed, job, produced=job["artifacts"])
+    assert "not the assembled HTML" in raised.value.message
+    assert f"{background['id']}.x" in raised.value.message
+
+
+def test_a_change_that_only_the_text_fitter_reads_is_accepted(script):
+    """`overflow` governs what the fitter may shrink, so it emits no CSS of its own."""
+    from lib.stages import repair as repair_stage
+
+    first_pass(script)
+    job = job_of(script)
+    before = scene_of(script)
+    after = copy.deepcopy(before)
+    title = next(l for l in after["textLayers"] if l["id"] == "t_title")
+    title["overflow"] = "visible" if title.get("overflow") != "visible" else "shrink"
+
+    routed = [{"code": "TITLE_MUST_KEEP_ITS_SIZE", "target": "typography",
+               "patch": {"layers": {"t_title": {"overflow": title["overflow"]}}}}]
+    out = repair_stage.verify_changed(before, after, routed, job, produced=job["artifacts"])
+    assert out["changed"] == {"t_title": ["overflow"]}
+    assert out["styleChanged"] == []
+
+
+def test_a_patch_may_not_touch_an_element_the_review_did_not_name(script, monkeypatch):
+    from lib import scene_patch
+
+    script["script"].append([OUTLINE])
+    first_pass(script)
+    real = scene_patch.apply_properties
+
+    def also_moves_the_subtitle(scene, layer_id, properties, *, target, font_names=()):
+        patched = real(scene, layer_id, properties, target=target, font_names=font_names)
+        patched = copy.deepcopy(patched)
+        for layer in patched["textLayers"]:
+            if layer["id"] == "t_sub":
+                layer["x"] = layer["x"] + 40
+        return patched
+
+    monkeypatch.setattr(scene_patch, "apply_properties", also_moves_the_subtitle)
+    with pytest.raises(RepairRouteUnresolved) as raised:
+        op(script, "REPAIR_LIGHT", 1)
+    assert "t_sub" in raised.value.message
+    assert "t_title" in raised.value.message
+
+
+def test_a_round_that_restyles_text_and_adds_a_shape_stays_in_scope(script):
+    """Measured live: a review asked for a readability gradient and a headline
+    change in the same round, and the design failed because the gradient the
+    repair had just been told to add counted as an element nobody named. An
+    addition names its elements by consequence - the shape the preset creates and
+    the effects list that records its owner - not by id.
+    """
+    from lib import scene_patch
+    from lib.stages import repair as repair_stage
+
+    first_pass(script)
+    job = job_of(script)
+    before = scene_of(script)
+    after = scene_patch.add_shape(before, "gradient-bottom",
+                                  effect_id="readabilityGradient")
+    title = next(l for l in after["textLayers"] if l["id"] == "t_title")
+    title["strokeColor"], title["strokeWidth"] = "#FFFFFF", 3.0
+
+    routed = [
+        {"code": "HEADLINE_OUTLINE_MISSING", "target": "typography",
+         "patch": {"layers": {"t_title": {"strokeColor": "#FFFFFF",
+                                          "strokeWidth": 3.0}}}},
+        {"code": "MISSING_READABILITY_SHADING", "target": "layout",
+         "patch": {"addShapes": [{"preset": "gradient-bottom",
+                                  "effect": "readabilityGradient",
+                                  "takeOver": False}]}},
+    ]
+
+    out = repair_stage.verify_changed(before, after, routed, job,
+                                      produced=job["artifacts"])
+    assert set(out["changed"]) == {"t_title", "effects",
+                                   scene_patch.shape_id_for("readabilityGradient")}
+
+
+def test_a_supported_patch_changes_the_scene_the_css_and_the_render(script):
+    from lib import assemble_html
+
+    script["script"].append([OUTLINE])
+    first_pass(script)
+    before_html = html_of(script)
+    before_style = assemble_html.element_style(before_html, "text-1001")
+
+    drive_remaining(script)
+
+    after_html = html_of(script)
+    after_style = assemble_html.element_style(after_html, "text-1001")
+    assert before_style != after_style
+    assert "-webkit-text-stroke" in after_style and "-webkit-text-stroke" not in before_style
+    record = artifacts.get_json(
+        script["jobId"], artifacts.artifact_key(script["jobId"], Stage.REPAIR, 1, "repair.json"))
+    assert record["touched"]["changed"] == {"t_title": ["strokeColor", "strokeWidth"]}
+    assert record["touched"]["styleChanged"] == ["t_title"]
+    # And the render really ran again on the new document.
+    assert job_of(script)["artifacts"][Stage.RENDER]["native"].endswith("/2/native.png")
+
+
+def test_an_unsupported_property_is_rejected_by_name(script):
+    """Rejected at classification, so no repair is attempted and nothing is ignored."""
+    script["script"].append([issue(
+        "TITLE_SHADOW_MISSING", target="typography", affected=["t_title"],
+        constraints=[("t_title", "textShadow", "0 2px 4px #000")],
+    )])
+    out = first_pass(script)
+    assert out["route"] == "unresolved"
+    routing = artifacts.get_json(
+        script["jobId"], job_of(script)["artifacts"][Stage.REVIEW]["review"])["routing"]
+    problems = " ".join(p for u in routing["unresolved"] for p in u["problems"])
+    assert "textShadow" in problems
+
+    # REPAIR_LIGHT refuses a review it was not routed, and the terminal step
+    # names the property rather than regenerating anything.
+    with pytest.raises(RepairRouteUnresolved):
+        op(script, "REPAIR_LIGHT", 1)
+    with pytest.raises(RepairRouteUnresolved) as raised:
+        op(script, "CORRECT", 1)
+    assert "textShadow" in raised.value.message
+
+
+def test_an_edit_that_changes_nothing_is_reported_as_a_no_op(script):
+    """The editor autosaves, so this is reported rather than raised."""
+    first_pass(script)
+    run_stage(script["jobId"], Stage.FINALIZE, attempt=1)
+    job = job_of(script)
+    scene = design_state.scene_of(
+        design_state.load(script["jobId"], design_state.current_pointer(job)["key"]))
+    title = next(l for l in scene["textLayers"] if l["id"] == "t_title")
+
+    out = design_edit.update(
+        {"jobId": script["jobId"], "requestId": "edit-noop", "expectedVersion": job["designVersion"],
+         "changes": {"content": {title["contentKey"]: title["text"]},
+                     "typography": {"t_title": {"fontSize": str(title["fontSize"])}}}},
+        "owner-1",
+    )
+    assert out["changed"] is False and out["noOp"] is True
+    assert out["noOpFields"] == [f"content.{title['contentKey']}", "typography.t_title.fontSize"]
+    assert out["designVersion"] == job["designVersion"]      # no new version
+    assert out["imageGenerationCalls"] == 0

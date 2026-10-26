@@ -4,6 +4,8 @@ recrop it, restyle it or regenerate it.
 
 {policy_block}
 
+{direction_block}
+
 CANVAS: {width}x{height} pixels.
 
 MANDATORY APPROVED TEXT (the complete list; every line must be present in the

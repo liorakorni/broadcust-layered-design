@@ -4,7 +4,8 @@ and fix exactly the problems listed here without changing anything that was
 already right:
 {defects}
 
-Fix them without creating new ones: keep every panel, badge, icon, frame and
-ornament that is in the image, fully opaque and exactly where it is, and remove
-only photographs and text. Where something must be removed, leave genuine
-transparency, not a flat colour, a rectangle or a backing shape.
+Fix them without creating new ones: keep every panel, frame and ornament that is
+in the image and is not listed above as removed, fully opaque and exactly where
+it is. Remove photographs, text, and the simple elements the layout draws itself.
+Where something must be removed, leave genuine transparency, not a flat colour, a
+rectangle or a backing shape.

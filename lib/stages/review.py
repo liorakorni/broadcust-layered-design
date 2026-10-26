@@ -154,6 +154,10 @@ def run(job_id, attempt, asset_id=None):
         copy_block=prompts.copy_block(copy_items),
         concept_review_block=basis["block"],
         design_block=repair_routing.describe_design(scene, produced[Stage.ASSEMBLE]["assets"]),
+        # Rendered from the executor's own property table, so the reviewer can
+        # only ask for corrections a repair is able to apply.
+        typography_properties=scene_patch.property_help("typography"),
+        layout_properties=scene_patch.property_help("layout"),
     )
     raw = vision.analyze(
         prompt,
@@ -642,7 +646,7 @@ def finalize(job_id, attempt, asset_id=None):
     concept_review = approved_concept["review"]
     # Non-blocking findings travel with the successful result. They never
     # blocked anything; they are reported so a caller can see what differs.
-    warnings = _warnings(concept_review, review)
+    warnings = _warnings(concept_review, review, job)
     selection = {
         "attempt": approved_concept["attempt"],
         "key": approved_concept["key"],
@@ -848,9 +852,9 @@ def _require_downstream_complete(job, produced, review, approved_concept):
         )
 
 
-def _warnings(concept_review, review):
-    """Every non-blocking finding, tagged with the review that raised it."""
-    found = []
+def _warnings(concept_review, review, job=None):
+    """Every non-blocking finding, tagged with the stage that raised it."""
+    found = [dict(w) for w in jobs.stage_warnings(job or {})]
     for source, issues in (
         (Stage.REVIEW_CONCEPT, concept_review.get("warnings", [])),
         (Stage.REVIEW, review.get("warnings", [])),
@@ -870,11 +874,23 @@ def _warnings(concept_review, review):
 
 
 def _layer_map(scene):
-    """The caller-facing description of what is in which layer (SPEC 2.5)."""
+    """The caller-facing description of what is in which layer (SPEC 2.5).
+
+    Every entry carries `elementId`, the id of the element it is emitted as, so a
+    caller holding the delivered HTML can go from a scene layer to the element it
+    must select and back without guessing at the naming. Editable shapes are
+    listed alongside text and imagery; `kind` says which.
+    """
+    from lib import assemble_html
+
+    text_ids = assemble_html.element_ids(scene)
+    image_ids = assemble_html.image_element_ids(scene)
+    shape_ids = assemble_html.shape_element_ids(scene)
     layers = [
         {
             "id": layer["id"],
             "kind": layer["type"],
+            "elementId": image_ids[layer["id"]],
             "assetId": layer.get("assetId"),
             "zIndex": layer["zIndex"],
             "box": {
@@ -890,6 +906,7 @@ def _layer_map(scene):
         {
             "id": layer["id"],
             "kind": "text",
+            "elementId": text_ids[layer["id"]],
             "role": layer["role"],
             "contentKey": layer["contentKey"],
             "zIndex": layer["zIndex"],
@@ -901,5 +918,22 @@ def _layer_map(scene):
             },
         }
         for layer in scene["textLayers"]
+    )
+    layers.extend(
+        {
+            "id": layer["id"],
+            "kind": "shape",
+            "elementId": shape_ids[layer["id"]],
+            "shape": layer["kind"],
+            "effect": layer["effect"],
+            "zIndex": layer["zIndex"],
+            "box": {
+                "x": layer["x"],
+                "y": layer["y"],
+                "width": layer["width"],
+                "height": layer["height"],
+            },
+        }
+        for layer in scene.get("shapeLayers") or []
     )
     return sorted(layers, key=lambda item: (item["zIndex"], item["id"]))

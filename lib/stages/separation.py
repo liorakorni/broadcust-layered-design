@@ -24,7 +24,9 @@ import io
 import logging
 
 import conf
-from lib import artifacts, edit_mask, jobs, prompts, stage_cache, telemetry
+from lib import (
+    artifacts, edit_mask, jobs, prompts, stage_cache, telemetry, validate_assets,
+)
 from lib.errors import AssetInvalid, Stage
 from lib.providers import image
 
@@ -69,7 +71,8 @@ def repair_overlay(job_id, attempt, asset_id=None):
     defect = (job.get("overlayDefect") or "").strip()
     prompt = (
         prompts.render(
-            "decoration-overlay", width=canvas["width"], height=canvas["height"]
+            "decoration-overlay", width=canvas["width"], height=canvas["height"],
+            components=_removal_block(job_id, job),
         )
         + "\n\n"
         + prompts.render(
@@ -217,7 +220,8 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
     concept = _concept_bytes(job_id, job)
 
     prompt = prompts.render(
-        prompt_name, width=canvas["width"], height=canvas["height"]
+        prompt_name, width=canvas["width"], height=canvas["height"],
+        components=_removal_block(job_id, job),
     )
     cache_id = stage_cache.key(
         stage, concept=artifacts.sha256_hex(concept),
@@ -255,6 +259,37 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
     }
     stage_cache.remember(job_id, cache_id, {"pointers": pointers, "result": out})
     return out
+
+
+def _removal_block(job_id, job):
+    """The components the layout draws, as lines for the extraction prompt.
+
+    Read from the decomposition plan EXTRACT_SCENE produced, so the overlay is
+    told to remove exactly what is about to be rebuilt in code - no more. Empty
+    (and the instruction harmless) for a scene with no plan.
+    """
+    scene_ref = (job.get("artifacts") or {}).get(Stage.EXTRACT_SCENE) or {}
+    if not scene_ref.get("scene"):
+        return ""
+    scene = artifacts.get_json(job_id, scene_ref["scene"])
+    components = validate_assets.editable_component_boxes(scene)
+    if not components:
+        return ""
+    return prompts.bullet_list(
+        [
+            f"the {_describe(component)} at x={component['box']['x']}, "
+            f"y={component['box']['y']}, {component['box']['width']}x"
+            f"{component['box']['height']} px"
+            for component in components
+        ]
+    )
+
+
+def _describe(component):
+    if component["kind"] == "rasterIcon":
+        return "pictogram (the symbol itself, not the circle behind it)"
+    colour = f" {component['color']}" if component.get("color") else ""
+    return f"{component.get('shape') or 'shape'}{colour}"
 
 
 def _concept_bytes(job_id, job):

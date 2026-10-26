@@ -80,6 +80,29 @@ def scene(**overrides):
                 "direction": "ltr",
             },
         ],
+        # A code-owned CTA background: part of the frozen contract, because the
+        # editor has to recognise a decoration as a layer it may restyle.
+        "shapeLayers": [
+            {
+                "id": "cta_background",
+                "type": "shape",
+                "kind": "panel",
+                "effect": "ctaBackground",
+                "x": 80,
+                "y": 840,
+                "width": 360,
+                "height": 96,
+                "zIndex": 9,
+                "color": "#FFD43B",
+                "opacity": 1.0,
+                "radius": 48,
+                "angle": 180,
+                "stops": [],
+                "borderColor": None,
+                "borderWidth": 0.0,
+                "rotation": 0,
+            },
+        ],
         "overlaySamples": [],
     }
     base.update(overrides)

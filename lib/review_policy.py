@@ -48,7 +48,14 @@ LEGACY_CATEGORY = {
 # "missing" and never counts as passing.
 CHECK_MANDATORY_COPY = "mandatoryCopy"
 CHECK_REFERENCE_STRUCTURE = "referenceStructure"
-REQUIRED_CONCEPT_CHECKS = (CHECK_MANDATORY_COPY, CHECK_REFERENCE_STRUCTURE)
+#: Whether the concept is composed in the resolved direction. A required check
+#: rather than a visual issue: a left-to-right composition for Hebrew copy cannot
+#: be corrected by a text or layout patch later, so it has to be caught here,
+#: inside the existing concept-correction bound.
+CHECK_COMPOSITION_DIRECTION = "compositionDirection"
+REQUIRED_CONCEPT_CHECKS = (
+    CHECK_MANDATORY_COPY, CHECK_REFERENCE_STRUCTURE, CHECK_COMPOSITION_DIRECTION,
+)
 
 PASSED = "passed"
 FAILED = "failed"
@@ -256,9 +263,30 @@ def evaluate_concept(verdict, policy, copy_items, placements=None, anchor_ids=()
     issues.extend(copy_issues)
 
     structure_status = _structure_status(verdict.get("checks", []), policy)
+    direction_status = _direction_status(verdict, policy)
+    if direction_status == FAILED:
+        # Recorded as an issue as well as a failed check, because the concept
+        # correction works from the blocking issues: without one it would be
+        # told the concept failed and not what to change.
+        resolved = policy.get("direction") or {}
+        issues.append(normalize_issue({
+            "code": "COMPOSITION_DIRECTION_WRONG",
+            "category": VISUAL,
+            "severity": BLOCKING,
+            "affected": "composition",
+            "impact": (
+                "The composition runs the wrong way for the approved copy "
+                f"(resolved {resolved.get('layoutDirection')}), so the reading "
+                "order and the column positions are wrong for the language. "
+                "Translating a left-to-right composition is not the same design."
+            ),
+            "suggestion": resolved.get("reason"),
+            "region": None,
+        }))
     required = [
         {"name": CHECK_MANDATORY_COPY, "status": copy_status},
         {"name": CHECK_REFERENCE_STRUCTURE, "status": structure_status},
+        {"name": CHECK_COMPOSITION_DIRECTION, "status": direction_status},
     ]
 
     blocking, warnings = split_issues(issues)
@@ -351,6 +379,20 @@ def _copy_evaluation(reported, copy_items, placements, model_issues):
     else:
         status = PASSED
     return checks, status, issues
+
+
+def _direction_status(verdict, policy):
+    """Did the concept come out in the direction the policy resolved?
+
+    `notApplicable` when the policy carries no direction (a job whose policy
+    predates it): there is nothing to have got wrong.
+    """
+    if not (policy.get("direction") or {}):
+        return NOT_APPLICABLE
+    reported = verdict.get("compositionDirectionOk")
+    if reported is None:
+        return MISSING
+    return PASSED if reported else FAILED
 
 
 def _structure_status(checks, policy):

@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 import conf
 from lib import (
     artifacts,
+    direction_policy,
     jobs,
     policy_context,
     prompts,
@@ -69,7 +70,7 @@ CONCEPT_REVIEW_SCHEMA = {
     "additionalProperties": False,
     "required": [
         "mode", "checks", "copyChecks", "documentedExceptions", "issues",
-        "suggestions", "constraintConflict",
+        "suggestions", "constraintConflict", "compositionDirectionOk",
     ],
     "properties": {
         "mode": {"type": "string"},
@@ -125,6 +126,9 @@ CONCEPT_REVIEW_SCHEMA = {
             },
         },
         "suggestions": {"type": "array", "items": {"type": "string"}},
+        # Judged against the direction block in the prompt, which carries the
+        # same resolved policy the concept was generated under.
+        "compositionDirectionOk": {"type": "boolean"},
         "constraintConflict": {
             "type": "object",
             "additionalProperties": False,
@@ -159,6 +163,9 @@ def review_candidate(job_id, *, policy, analysis, copy_items, placements,
         may_change=prompts.bullet_list(policy["mayChange"]),
         documented_exceptions=prompts.bullet_list(policy["documentedExceptions"]),
         severity_block=review_policy.severity_block(policy["reviewPolicy"]),
+        direction_block=direction_policy.prompt_block(
+            policy.get("direction") or direction_policy.resolve({}, copy_items)
+        ),
         reference_anchors=json.dumps(analysis["anchors"], ensure_ascii=False),
         copy_block=prompts.copy_block(copy_items),
         placement_block=concept_stage.placement_block(placements, copy_items),

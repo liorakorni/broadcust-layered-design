@@ -256,6 +256,10 @@ def test_omitted_and_explicit_balanced_hash_identically_and_like_before(start_pa
     body = parse_start_request(omitted).model_dump(mode="json")
     body.pop("reviewStrictness")
     body.pop("designFlow")
+    # Added later still: a request accepted before they existed carried none of
+    # them, and their defaults mean what its absence meant.
+    for later in ("layoutDirection", "textDirection", "referenceLayoutPolicy"):
+        body.pop(later)
     import hashlib
     legacy = hashlib.sha256(
         json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -289,12 +293,13 @@ def test_generation_freedom_and_review_strictness_are_independent():
 
 def test_the_policy_carries_the_versioned_review_policy():
     policy = reference_policy.derive_reference_policy(0)
-    assert policy["policyVersion"] == "2.0"
+    assert policy["policyVersion"] == reference_policy.POLICY_VERSION
     review = policy["reviewPolicy"]
     assert review["reviewStrictness"] == "balanced"
     assert set(review["severityRules"]) == {
         "warning", "blockingVisual", "blockingContent", "blockingTechnical"}
-    assert review["requiredConceptChecks"] == ["mandatoryCopy", "referenceStructure"]
+    assert review["requiredConceptChecks"] == [
+        "mandatoryCopy", "referenceStructure", "compositionDirection"]
 
 
 def test_analyze_reference_stores_the_strictness_and_version(pipeline):
@@ -304,7 +309,7 @@ def test_analyze_reference_stores_the_strictness_and_version(pipeline):
     policy = artifacts.get_json(pipeline["jobId"], out["policy"])
     analysis = artifacts.get_json(pipeline["jobId"], out["analysis"])
     assert policy["reviewStrictness"] == "balanced"
-    assert policy["policyVersion"] == analysis["policyVersion"] == "2.0"
+    assert policy["policyVersion"] == analysis["policyVersion"] == reference_policy.POLICY_VERSION
 
 
 def test_there_is_no_fixed_overlap_threshold_anywhere():
@@ -359,7 +364,7 @@ def test_an_old_analysis_is_not_silently_reused(pipeline, distinct_concepts):
     with pytest.raises(PolicyVersionMismatch) as exc:
         run_stage(pipeline["jobId"], Stage.CONCEPT)
     assert exc.value.code == "POLICY_VERSION_MISMATCH"
-    assert "'1.0'" in exc.value.message and "'2.0'" in exc.value.message
+    assert "'1.0'" in exc.value.message and f"'{reference_policy.POLICY_VERSION}'" in exc.value.message
 
 
 def test_an_analysis_stamped_with_another_version_is_refused(pipeline, distinct_concepts):
@@ -644,12 +649,12 @@ def test_the_selection_is_persisted_with_key_hash_attempt_policy_and_reason(pipe
     assert frozen["key"] == job_of(pipeline)["artifacts"][Stage.CONCEPT]["concept"]
     assert frozen["sha256"] == artifacts.sha256_hex(concept_bytes(pipeline, 1))
     assert frozen["attempt"] == 1
-    assert frozen["policyVersion"] == "2.0"
+    assert frozen["policyVersion"] == reference_policy.POLICY_VERSION
     assert frozen["reviewStrictness"] == "balanced"
     assert "eligible" in frozen["selectionReason"]
     record = artifacts.get_json(pipeline["jobId"], frozen["selectionKey"])
     assert record["selectedAttempt"] == 1
-    assert record["policyVersion"] == "2.0"
+    assert record["policyVersion"] == reference_policy.POLICY_VERSION
     assert record["candidates"][0]["eligible"] is True
 
 
@@ -735,7 +740,8 @@ def test_an_earlier_eligible_candidate_is_selected_over_a_later_invalid_one(
     record = jobs.concept_candidates(job_of(pipeline))[0]
     assert record["historicalReviewKeys"] == [original_key]
     assert record["reviewKey"] != original_key
-    assert record["reviewKey"].endswith("concept-review-reevaluation-2.0-balanced.json")
+    assert record["reviewKey"].endswith(
+        f"concept-review-reevaluation-{reference_policy.POLICY_VERSION}-balanced.json")
     assert artifacts.get_json(pipeline["jobId"], original_key)["policyVersion"] == "1.0"
     assert artifacts.get_json(pipeline["jobId"], record["reviewKey"])["eligible"] is True
 

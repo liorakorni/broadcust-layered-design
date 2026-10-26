@@ -2,25 +2,30 @@ Extract ONLY the graphic artwork from this image onto a fully transparent
 background.
 
 KEEP, in their exact original positions and at their exact original size:
-- Decorative panels, ribbons, banners, badges and framing shapes.
-- Button and call-to-action background shapes.
-- Ornamental flourishes, dividers, icons and graphic texture that supports text.
-- Icon badges: a coloured or white circle, square or pill holding a pictogram
-  (a phone, envelope, pin, globe, clock, arrow). Keep BOTH the shape and its
-  pictogram, fully opaque, even when words sit beside them. Remove only the
-  words, never the badge.
+- Decorative panels, ribbons, banners and framing shapes that are not listed
+  under REMOVE below.
+- Ornamental flourishes, dividers and graphic texture that supports text.
+- Illustrations, hand-drawn marks, patterns and anything with internal detail.
 
 - Solid, dark or textured background surfaces that are NOT photographic: a black,
   coloured, grainy, scratched or patterned panel behind the text is a graphic
   panel, not the photograph. Keep it whole and fully opaque, edge to edge,
   including its surface texture.
+- A torn, ragged or hand-cut edge divides such a field from the photograph. Keep
+  the whole field on its side of that edge - the flat colour as well as the
+  coloured ribbon along it, right into the corners it fills. Dropping the field
+  and keeping only the ribbon leaves a hole nothing else fills.
 
 REMOVE completely:
 - The entire photographic scene: sky, landscape, buildings, people, foliage,
   objects, and every photographic texture.
-- Every word, letter, number and logo. Keep the panel a word sat on, but not
-  the word itself.
+- Every word, letter, number and logo.
 - Any independent inset photos or cut-out subjects.
+- The simple elements listed below. They are rebuilt as editable layers, so a
+  copy left here would be a duplicate the customer cannot move or restyle: when
+  they reposition the editable one, the one left here stays behind. Leave genuine
+  transparency where each was, and keep the artwork around it untouched.
+{components}
 
 TRANSPARENCY REQUIREMENTS:
 - Everywhere the photograph showed through must be genuinely transparent with a
