@@ -17,7 +17,9 @@ import io
 import logging
 
 import conf
-from lib import artifacts, dependencies, design_state, jobs, scene_patch, validate_assets
+from lib import (
+    artifacts, dependencies, design_state, jobs, readability, scene_patch, validate_assets,
+)
 from lib.errors import InvalidScene, InvalidTransparency, OverlayRepairNeeded, Stage
 from lib.providers import vision
 
@@ -212,7 +214,16 @@ def run(job_id, attempt, asset_id=None):
             ),
             bind={"assets": dict(shas), "concept": concept_sha},
         )
-        code_owned = _own_missing_shading(job_id, job, scene, attempt, fidelity)
+        # Measured first: the pixels say how much shading the cleaned photograph is
+        # missing, which is more exact than a reviewer naming an edge.
+        fitted = _fit_readability(
+            job_id, scene, attempt, concept, background, overlay)
+        # When the pixels show nothing missing but a reviewer names an edge, the
+        # reviewer's finding still acts (as it always has), through the same
+        # data-driven band; it is the weaker evidence, so it only fills the gap.
+        code_owned = fitted if fitted and fitted["action"] in ("added", "kept") else \
+            _own_missing_shading(job_id, job, scene, attempt, fidelity)
+        measured = fitted if fitted and fitted["action"] in ("not-needed", "failed") else None
         if code_owned and code_owned["action"] == "not-added":
             # The layout cannot take the gradient (shapes disabled, or no stacking
             # slot), so it is still missing: the overlay repair is the fallback.
@@ -252,6 +263,7 @@ def run(job_id, attempt, asset_id=None):
         "entries": entries,
         "policyVersion": dependencies.VALIDATION_POLICY_VERSION,
         "codeOwned": code_owned,
+        "readability": measured,
     }
     key = artifacts.artifact_key(job_id, Stage.VALIDATE_ASSETS, attempt, "validation.json")
     stored = artifacts.put_json(key, result)
@@ -388,6 +400,51 @@ def _surrender_to_artwork(job_id, scene, attempt, exc):
         job_id, ",".join(givable), surrender["owner"],
     )
     return True
+
+
+def _fit_readability(job_id, scene, attempt, concept, background, overlay):
+    """Draw the concept's readability shading in code, fitted to the pixels.
+
+    Runs before the first assembly, so the first HTML already has it and no repair
+    round is spent discovering that the cleaned photograph came back brighter than
+    the concept. The gradient is the difference between the two (see
+    lib/readability.py), so it is never a second copy of shading the photograph
+    still carries. No image call.
+
+    Returns a record for the validation document, or None when the layout does not
+    draw one. Never raises: a measurement that cannot be taken leaves the scene as
+    it is, and the vision-based path and the final review still judge the result.
+    """
+    drawn = {s.get("effect") for s in scene.get("shapeLayers") or []}
+    for effect in scene.get("effects") or []:
+        if effect["kind"] == "readabilityGradient" and effect["id"] in drawn:
+            return {"effect": "readabilityGradient", "action": "kept", "owner": "layout"}
+    try:
+        fit = readability.fit(concept, background, scene, overlay)
+    except Exception as exc:  # a measurement problem must not fail the job
+        log.warning("readability fit failed jobId=%s error=%s", job_id, type(exc).__name__)
+        return {"effect": "readabilityGradient", "action": "failed", "reason": type(exc).__name__}
+    if fit["action"] != "add":
+        return {"effect": "readabilityGradient", "action": "not-needed",
+                "reason": fit["reason"], "measured": fit.get("measured")}
+    try:
+        patched = scene_patch.add_shape(
+            scene, f"gradient-{fit['edge']}", take_over=True, fitted=fit)
+    except InvalidScene as exc:
+        return {"effect": "readabilityGradient", "action": "not-added",
+                "edge": fit["edge"], "reason": exc.message, "measured": fit["measured"]}
+    key = artifacts.artifact_key(
+        job_id, Stage.VALIDATE_ASSETS, attempt, "scene-readability.json")
+    stored = artifacts.put_json(key, patched)
+    jobs.set_working_scene(
+        job_id, {"key": stored["key"], "forAttempt": int(attempt), "baseVersion": 0}
+    )
+    jobs.add_metric(job_id, "codeOwnedEffects")
+    jobs.add_metric(job_id, "fittedGradients")
+    return {"effect": "readabilityGradient", "action": "added", "edge": fit["edge"],
+            "owner": "layout", "scene": stored["key"], "box": fit["box"],
+            "stops": fit["stops"], "measured": fit["measured"],
+            "imageGenerationCalls": 0}
 
 
 def _own_missing_shading(job_id, job, scene, attempt, detail):

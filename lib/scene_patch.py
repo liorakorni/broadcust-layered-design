@@ -21,7 +21,7 @@ import copy
 import re
 
 import conf
-from lib import schemas
+from lib import alignment, readability, schemas
 from lib.errors import InvalidScene
 from lib.schemas import HEX_COLOR
 
@@ -244,6 +244,12 @@ def apply_properties(scene, layer_id, properties, *, target, font_names=()):
             _set_gradient_strength(layer, value)
         else:
             layer[name] = value
+            # A position or alignment someone chose on purpose is not a drift to be
+            # corrected: the layer leaves its alignment group, or assembly would
+            # put it straight back. A width change keeps it - the shared edge is
+            # exactly what makes widths free to differ.
+            if kind == "text" and name in ("x", "align"):
+                alignment.release(patched, layer_id)
     return patched
 
 
@@ -315,7 +321,7 @@ def shape_id_for(effect_id):
     return f"shape-{effect_id}"
 
 
-def add_shape(scene, preset, *, effect_id=None, take_over=False):
+def add_shape(scene, preset, *, effect_id=None, take_over=False, fitted=None):
     """Return a copy of `scene` with one preset shape added and its effect declared.
 
     Refuses when it would create a second owner for the effect (an existing effect
@@ -328,6 +334,11 @@ def add_shape(scene, preset, *, effect_id=None, take_over=False):
     effect is then moved to the layout rather than declared twice. It is never
     inferred from the scene - a photograph that really does carry its gradient
     looks identical from here - so only a finding can ask for it.
+
+    `fitted` is the geometry measured by lib/readability.fit (edge, box, angle,
+    colour, stops). It replaces the preset's assumed band and stops, so the
+    gradient matches the concept and the copy it serves instead of a fixed 60%.
+    A preset used without it still sizes its band from where the copy sits.
     """
     if not conf.CODE_SHAPES_ENABLED:
         raise InvalidScene(
@@ -380,8 +391,10 @@ def add_shape(scene, preset, *, effect_id=None, take_over=False):
         )
     width = patched["canvas"]["width"]
     height = patched["canvas"]["height"]
-    band = round((width if edge in ("left", "right") else height)
-                 * (0.6 if kind == "gradient" else 0.3))
+    if kind == "gradient":
+        band = readability.band_for(patched, edge)
+    else:
+        band = round((width if edge in ("left", "right") else height) * 0.3)
     horizontal = edge in ("left", "right")
     x = width - band if edge == "right" else 0
     y = height - band if edge == "bottom" else 0
@@ -406,8 +419,19 @@ def add_shape(scene, preset, *, effect_id=None, take_over=False):
         "stops": stops if kind == "gradient" else [],
         "borderColor": None, "borderWidth": 0.0, "rotation": 0,
     }
+    note = None
+    if fitted and kind == "gradient":
+        box = fitted["box"]
+        shape.update({"x": box["x"], "y": box["y"], "width": box["width"],
+                      "height": box["height"], "angle": fitted["angle"],
+                      "stops": [dict(stop) for stop in fitted["stops"]]})
+        measured = fitted.get("measured") or {}
+        note = (
+            f"Fitted from the concept and the cleaned photograph: {fitted['edge']} edge "
+            f"at {measured.get('edgeAlpha', 0):.0%}, {box['width']}x{box['height']}px."
+        )
     shapes.append(shape)
-    effects.append({"id": effect_id, "kind": effect_kind, "owner": "layout", "note": None})
+    effects.append({"id": effect_id, "kind": effect_kind, "owner": "layout", "note": note})
     if patched.get("components"):
         # The plan has to stay complete: a shape with no entry in it is read as a
         # component nobody decomposed, and the patched scene is rejected.

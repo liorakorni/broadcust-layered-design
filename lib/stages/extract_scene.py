@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 import conf
-from lib import artifacts, concept_sample, jobs, prompts, schemas
+from lib import alignment, artifacts, concept_sample, jobs, prompts, schemas
 from lib.errors import InvalidScene, Stage
 from lib.stages import independent
 from lib.providers import vision
@@ -296,19 +296,26 @@ def run(job_id, attempt, asset_id=None):
     # The shapes are about to be drawn in CSS from these colours, so they are
     # measured off the approved concept rather than taken on trust. Geometry is
     # left as reported: see lib/concept_sample.py.
-    corrections = concept_sample.correct_shape_colors(concept_bytes, document)
-    if corrections:
+    measured = concept_sample.measure_shape_colors(concept_bytes, document)
+    corrections, ignored = measured["corrections"], measured["ignored"]
+    if corrections or ignored:
         log.info(
-            "shape colours corrected from the concept jobId=%s count=%d",
-            job_id, len(corrections),
+            "shape colours measured jobId=%s corrected=%d ignored=%d",
+            job_id, len(corrections), len(ignored),
         )
-        document = schemas.parse_scene(          # nothing unvalidated is stored
-            document,
-            canvas["width"],
-            canvas["height"],
-            allowed_content_keys=set(approved),
-            allowed_fonts=set(conf.APPROVED_FONT_FAMILIES),
-        ).model_dump(mode="json")
+
+    # Relationships the concept shows, which a model reading each box on its own
+    # does not carry: text that shares an edge, shapes that share a fill. Both are
+    # measured from pixels and recorded; ASSEMBLE turns them into positions.
+    document["alignmentGroups"] = alignment.detect_groups(concept_bytes, document)
+    document["fillGroups"] = alignment.fill_groups(document)
+    document = schemas.parse_scene(          # nothing unvalidated is stored
+        document,
+        canvas["width"],
+        canvas["height"],
+        allowed_content_keys=set(approved),
+        allowed_fonts=set(conf.APPROVED_FONT_FAMILIES),
+    ).model_dump(mode="json")
 
     key = artifacts.artifact_key(job_id, Stage.EXTRACT_SCENE, attempt, "scene.json")
     stored = artifacts.put_json(key, document)
@@ -319,14 +326,16 @@ def run(job_id, attempt, asset_id=None):
         "conceptSha256": artifacts.sha256_hex(concept_bytes),
         "components": len(document.get("components") or []),
         "shapeLayers": len(document.get("shapeLayers") or []),
+        "alignmentGroups": len(document.get("alignmentGroups") or []),
+        "fillGroups": len(document.get("fillGroups") or []),
     }
-    if corrections:
+    if corrections or ignored:
         # Kept beside the scene rather than inside it: the scene is the design,
         # and this is the evidence of how it was adjusted.
         colors_key = artifacts.artifact_key(
             job_id, Stage.EXTRACT_SCENE, attempt, "scene-colors.json")
         recorded["colorCorrections"] = artifacts.put_json(
-            colors_key, {"corrections": corrections})["key"]
+            colors_key, {"corrections": corrections, "ignored": ignored})["key"]
     jobs.record_artifacts(job_id, Stage.EXTRACT_SCENE, attempt, recorded)
     return {
         "scene": stored["key"],

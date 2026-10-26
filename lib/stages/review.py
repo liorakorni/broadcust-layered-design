@@ -179,7 +179,11 @@ def run(job_id, attempt, asset_id=None):
     ]
     issues, _ = review_policy.split_issues(reported)
     warnings = [i for i in reported if i["severity"] != review_policy.BLOCKING]
-    issues.extend(_render_problems(produced, scene, job))
+    measured = _render_problems(produced, scene, job)
+    # A measured finding that is only a warning (a shared edge a few pixels off)
+    # is reported and judged by the progress check, never routed as blocking.
+    issues.extend(i for i in measured if i["severity"] == review_policy.BLOCKING)
+    warnings.extend(i for i in measured if i["severity"] != review_policy.BLOCKING)
 
     # Mandatory text is verified in code on every candidate, not left to the
     # model: a repair that touched typography or layout is exactly the change that
@@ -505,7 +509,8 @@ def _final_issue(issue):
 
 
 def _technical_issue(code, affected, message, layer_id=None, *, target=None,
-                     element_ids=(), constraints=(), rerender=False):
+                     element_ids=(), constraints=(), rerender=False,
+                     severity=review_policy.BLOCKING):
     """A mechanical finding, with the routing the backend itself knows.
 
     The renderer and the content check measured these, so the repair target and
@@ -515,7 +520,7 @@ def _technical_issue(code, affected, message, layer_id=None, *, target=None,
     return {
         "code": code,
         "category": review_policy.TECHNICAL,
-        "severity": review_policy.BLOCKING,
+        "severity": severity,
         "affected": affected,
         "impact": message,
         "suggestion": None,
@@ -586,6 +591,7 @@ def _render_problems(produced, scene, job):
                 target=target,
                 element_ids=ids,
                 constraints=constraints,
+                severity=problem.get("severity") or review_policy.BLOCKING,
             )
         )
     return issues

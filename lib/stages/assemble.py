@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import copy
 
-from lib import artifacts, assemble_html, jobs, media, render as renderer
+from lib import (
+    alignment, artifacts, assemble_html, geometry, jobs, media, render as renderer,
+    typography_check,
+)
 from lib.errors import RenderFailed, Stage
 
 
@@ -24,8 +27,13 @@ def assemble(job_id, attempt, asset_id=None):
     scene = artifacts.get_json(job_id, scene_key_for(job, attempt))
 
     published = _publish_assets(job_id, job, attempt)
+    # The concept's alignment relationships become positions here, in code, so the
+    # same scene always assembles to the same document and a box that was sized a
+    # few pixels differently from its neighbours does not move the shared edge.
+    scene, aligned = alignment.apply(scene)
     html = assemble_html.assemble(scene, published["urls"], canvas)
 
+    requested = {l["id"]: l["fontSize"] for l in scene["textLayers"]}
     scene, fitted = _fit_text(scene, html, canvas)
     if fitted:
         html = assemble_html.assemble(scene, published["urls"], canvas)
@@ -45,6 +53,10 @@ def assemble(job_id, attempt, asset_id=None):
         "htmlHash": stored["sha256"],
         "scene": stored_scene["key"],
         "fitted": fitted,
+        "aligned": aligned,
+        # What each layer will actually render with, after fitting: the size that
+        # was asked for beside the size that was set, so a shrink is never silent.
+        "typography": _effective_typography(scene, requested),
         # FINALIZE hashes this manifest, so it is persisted rather than only
         # returned through workflow state, which carries pointers alone.
         "assets": published["manifest"],
@@ -96,6 +108,21 @@ def _snapshot(job_id, job, attempt, scene, manifest, html_stored):
     key = design_state.store(job_id, snapshot)
     design_state.commit(job_id, snapshot, key)
     return {"version": version, "key": key}
+
+
+def _effective_typography(scene, requested):
+    return {
+        layer["id"]: {
+            "requestedFontSize": requested.get(layer["id"], layer["fontSize"]),
+            "fontSize": layer["fontSize"],
+            "fontFamily": layer["fontFamily"], "fontWeight": layer.get("fontWeight", 400),
+            "letterSpacing": layer.get("letterSpacing", 0.0),
+            "lineHeight": layer.get("lineHeight", 1.2),
+            "fill": layer.get("fill", "solid"), "strokeWidth": layer.get("strokeWidth", 0.0),
+            "box": [layer["width"], layer["height"]],
+        }
+        for layer in scene["textLayers"]
+    }
 
 
 def _fit_text(scene, html, canvas):
@@ -180,6 +207,12 @@ def _asset_keys(job):
     return keys
 
 
+def _concept_bytes(job_id, job):
+    """The approved concept, or None for a flow that has none to compare against."""
+    approved = job.get("approvedConcept") or {}
+    return artifacts.get_bytes(job_id, approved["key"]) if approved.get("key") else None
+
+
 def render(job_id, attempt, asset_id=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, Stage.RENDER)
@@ -208,10 +241,17 @@ def render(job_id, attempt, asset_id=None):
 
     # Render problems are returned rather than raised: REVIEW weighs them
     # alongside its own findings and the correction loop may fix them.
+    # The browser's own measurement of where the copy landed: shared edges that
+    # drifted, lines that overlap, copy outside the canvas.
+    measured = geometry.check_render(scene, checks.get("rects"), canvas)
+    measured += typography_check.check(
+        scene, _concept_bytes(job_id, job), result["native"], canvas,
+        platform_fonts=checks.get("platformFonts"),
+    )
     out = {
         "native": native["key"],
         "feed": feed["key"],
-        "problems": checks["problems"],
+        "problems": list(checks["problems"]) + measured,
         "checksPerformed": checks.get("performed", []),
     }
     jobs.record_artifacts(job_id, Stage.RENDER, attempt, out)

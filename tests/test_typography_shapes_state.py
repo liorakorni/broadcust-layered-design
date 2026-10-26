@@ -256,7 +256,8 @@ def test_only_decorations_are_exempt_from_empty_text_and_fitting():
     source = _inspect_source()
     # The copy checks and the fit are scoped to layers that are not decorations.
     assert renderer._FIT_SCRIPT.count('.words:not([data-role="decoration"])') == 1
-    assert source.count('.words:not([data-role="decoration"])') == 2   # checks, count
+    # The checks, the measured rectangles, and the count.
+    assert source.count('.words:not([data-role="decoration"])') == 3
     # Nothing else is exempt, and position is checked for every layer.
     assert "'.words, .badges, .background'" in source
     assert "EMPTY_TEXT" in source and "OUT_OF_BOUNDS" in source

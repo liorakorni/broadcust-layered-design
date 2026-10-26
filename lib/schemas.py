@@ -654,6 +654,52 @@ class SampleRegion(Strict):
     height: int
 
 
+class AlignmentGroup(Strict):
+    """Text layers that share one edge (or centre line) in the concept.
+
+    The model sizes each text box on its own, so a column the concept set flush on
+    the right comes back with right edges a few pixels apart and drifts when the
+    boxes are resized. The group is the relationship, measured from the concept's
+    ink: members keep their different widths and are placed so the edge is shared.
+    Layers that sit off the line on purpose, and centred layers, are not members.
+    """
+
+    id: str
+    #: Which line is shared: the members' left edge, right edge or centre.
+    edge: Literal["left", "right", "center"]
+    layerIds: list[str] = Field(min_length=2, max_length=20)
+    #: The shared x coordinate in px, measured from the concept.
+    anchor: int
+    #: Ink edge measured per member in the concept, px (evidence, not instruction).
+    inkEdges: dict[str, int] = Field(default_factory=dict)
+    #: Vertical gaps between consecutive members' ink in the concept, top to bottom.
+    gaps: list[int] = Field(default_factory=list, max_length=20)
+    note: Optional[str] = None
+
+
+class FillGroup(Strict):
+    """Shapes that share one fill in the concept, without forcing it.
+
+    A brand accent used on the call to action, the contact circles and the dots is
+    one colour to the customer and one editing handle to the editor. Members keep
+    their own `color`: the group records the measured reference and how far each
+    member sits from it, so a restyle can move them together and a review can tell
+    a deliberate second colour from a mis-sampled one.
+    """
+
+    id: str
+    layerIds: list[str] = Field(min_length=2, max_length=40)
+    color: str
+    note: Optional[str] = None
+
+    @field_validator("color")
+    @classmethod
+    def _color(cls, v):
+        if not HEX_COLOR.match(v):
+            raise ValueError(f"invalid colour {v!r}")
+        return v
+
+
 class Scene(Strict):
     canvas: Canvas
     textLayers: list[TextLayer] = Field(default_factory=list, max_length=60)
@@ -668,6 +714,10 @@ class Scene(Strict):
     #: scene written before this existed), and the plan checks are skipped; a plan
     #: that exists must be complete.
     components: list[Component] = Field(default_factory=list, max_length=40)
+    #: Relationships between layers, measured from the concept. Empty on every scene
+    #: written before they existed, which means "no relationship was recorded".
+    alignmentGroups: list[AlignmentGroup] = Field(default_factory=list, max_length=20)
+    fillGroups: list[FillGroup] = Field(default_factory=list, max_length=10)
 
 
 def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
@@ -719,7 +769,34 @@ def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,
             )
     check_effect_ownership(scene)
     check_component_plan(scene)
+    check_groups(scene)
     return scene
+
+
+def check_groups(scene):
+    """A relationship may only name layers that exist, once."""
+    text = {layer.id for layer in scene.textLayers}
+    shapes = {layer.id for layer in scene.shapeLayers}
+    claimed = {}
+    for group in scene.alignmentGroups:
+        for layer_id in group.layerIds:
+            if layer_id not in text:
+                raise InvalidScene(
+                    f"Alignment group {group.id!r} names {layer_id!r}, which is not a "
+                    "text layer."
+                )
+            if layer_id in claimed:
+                raise InvalidScene(
+                    f"Text layer {layer_id!r} is in alignment groups {claimed[layer_id]!r} "
+                    f"and {group.id!r}; a layer has one shared edge."
+                )
+            claimed[layer_id] = group.id
+    for group in scene.fillGroups:
+        missing = [i for i in group.layerIds if i not in shapes]
+        if missing:
+            raise InvalidScene(
+                f"Fill group {group.id!r} names {missing[0]!r}, which is not a shape layer."
+            )
 
 
 def check_effect_ownership(scene):

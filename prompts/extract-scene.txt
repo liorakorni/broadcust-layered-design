@@ -85,8 +85,11 @@ Rules:
 - a shape's zIndex sits above the artwork it replaces and below the text it
   backs.
 - give every shape an "effect" id, and add one entry to "effects" with the same
-  id, the matching kind and owner "layout". A gradient already painted into the
-  photograph is reported as an effect with owner "photo" and NO shape layer.
+  id, the matching kind and owner "layout". A darkening or
+  lightening behind the copy that is part of the photograph is reported as a
+  "readabilityGradient" effect with owner "photo" and NO shape layer; you do not
+  need to size it. After the photograph is cleaned, the layout measures what the
+  clean photograph is missing and draws exactly that itself.
 - values that do not apply to the kind are null (color for a gradient,
   borderColor for a panel) or 0.
 - leave genuinely complex artwork alone: illustrations, textures, hand-drawn

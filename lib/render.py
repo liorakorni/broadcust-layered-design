@@ -106,6 +106,7 @@ def render(html, canvas, scene):
             performed.append("fontsResolved")
 
             checks = _inspect(page, canvas)
+            checks["platformFonts"] = _platform_fonts(page, list(checks.get("rects") or {}))
             performed.extend(["textFit", "emptyText", "bounds", "uniqueIds"])
             native = page.screenshot(type="png")
             feed = _feed_capture(page, canvas)
@@ -245,6 +246,38 @@ def _missing_fonts(page, families):
     )
 
 
+def _platform_fonts(page, element_ids):
+    """The faces the browser actually used for each text element, or None.
+
+    `document.fonts.check` says a family can be resolved, not that it drew the text:
+    a missing weight or glyph falls through to another face silently, with different
+    widths. Chromium's own report of the platform fonts behind a node is the only
+    first-hand answer. A browser that cannot give it (a different engine, a protocol
+    change) yields None, which the caller treats as "not measured", never as a pass.
+    """
+    try:
+        client = page.context.new_cdp_session(page)
+        client.send("DOM.enable")
+        client.send("CSS.enable")
+        root = client.send("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
+        out = {}
+        for element in element_ids:
+            node = client.send(
+                "DOM.querySelector", {"nodeId": root, "selector": f"#{element} .text"}
+            )["nodeId"]
+            if not node:
+                continue
+            fonts = client.send("CSS.getPlatformFontsForNode", {"nodeId": node})["fonts"]
+            out[element] = [
+                {"familyName": f.get("familyName"), "postScriptName": f.get("postScriptName"),
+                 "glyphCount": f.get("glyphCount", 0)}
+                for f in fonts
+            ]
+        return out
+    except Exception:
+        return None
+
+
 def _inspect(page, canvas):
     """Measure what rendered: overflow, out-of-bounds boxes, duplicate IDs.
 
@@ -304,8 +337,41 @@ def _inspect(page, canvas):
                 }
             }
 
+            // Where each line of copy actually ended up: the union of the text's own
+            // line rectangles, which is what geometry checks compare. The element's
+            // box says where the text was allowed to be, not where it is.
+            const rects = {};
+            for (const el of document.querySelectorAll(
+                    '.words:not([data-role="decoration"])')) {
+                const inner = el.querySelector('.text');
+                if (!inner || !inner.textContent.trim() || !el.id) continue;
+                const range = document.createRange();
+                range.selectNodeContents(inner);
+                let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+                for (const r of range.getClientRects()) {
+                    if (r.width < 0.5 || r.height < 0.5) continue;
+                    left = Math.min(left, r.left); top = Math.min(top, r.top);
+                    right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom);
+                }
+                if (left === Infinity) continue;
+                const b = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                rects[el.id] = {
+                    ink: {left, top, right, bottom},
+                    box: {left: b.left, top: b.top, right: b.right, bottom: b.bottom},
+                    // What the browser actually resolved, so a fallback face or a
+                    // size the fitting changed is visible rather than assumed.
+                    computed: {fontFamily: style.fontFamily,
+                               fontSize: parseFloat(style.fontSize),
+                               fontWeight: style.fontWeight,
+                               letterSpacing: style.letterSpacing,
+                               lineHeight: style.lineHeight},
+                };
+            }
+
             return {
                 problems,
+                rects,
                 textLayers: document.querySelectorAll(
                     '.words:not([data-role="decoration"])').length,
                 decorations: document.querySelectorAll(

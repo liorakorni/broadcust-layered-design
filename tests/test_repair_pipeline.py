@@ -1352,14 +1352,14 @@ def test_the_gradient_falls_back_to_overlay_repair_when_shapes_are_disabled(scri
         run_stage(script["jobId"], Stage.VALIDATE_ASSETS, attempt=1)
 
 
-@pytest.mark.parametrize("preset,box,angle", [
-    ("gradient-left", (0, 0, 614, 1024), 90),
-    ("gradient-right", (410, 0, 614, 1024), 270),
-    ("gradient-top", (0, 0, 1024, 614), 0),
-    ("gradient-bottom", (0, 410, 1024, 614), 180),
+@pytest.mark.parametrize("preset,angle", [
+    ("gradient-left", 90),
+    ("gradient-right", 270),
+    ("gradient-top", 0),
+    ("gradient-bottom", 180),
 ])
-def test_gradient_presets_put_the_dark_end_at_the_named_edge(preset, box, angle):
-    from lib import scene_patch
+def test_gradient_presets_put_the_dark_end_at_the_named_edge(preset, angle):
+    from lib import readability, scene_patch
 
     scene = copy.deepcopy(SCENE)
     scene["imageLayers"][0]["zIndex"] = 0
@@ -1367,6 +1367,14 @@ def test_gradient_presets_put_the_dark_end_at_the_named_edge(preset, box, angle)
         layer["zIndex"] = max(layer["zIndex"], 1)
     patched = scene_patch.add_shape(scene, preset)
     shape = patched["shapeLayers"][-1]
+    # The band is sized from where the copy sits, not a fixed share of the canvas.
+    edge = preset.split("-")[1]
+    band = readability.band_for(scene, edge)
+    width, height = scene["canvas"]["width"], scene["canvas"]["height"]
+    box = {
+        "left": (0, 0, band, height), "right": (width - band, 0, band, height),
+        "top": (0, 0, width, band), "bottom": (0, height - band, width, band),
+    }[edge]
     assert (shape["x"], shape["y"], shape["width"], shape["height"]) == box
     assert shape["angle"] == angle
     dark_at = shape["stops"][0] if preset in ("gradient-left", "gradient-right") else shape["stops"][-1]

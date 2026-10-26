@@ -211,6 +211,7 @@ def editable_component_boxes(scene):
                 "kind": component["kind"],
                 "shape": layer.get("kind"),
                 "color": layer.get("color"),
+                "radius": int(layer.get("radius") or 0),
                 "box": {k: int(layer[k]) for k in ("x", "y", "width", "height")},
             }
         )
@@ -359,17 +360,22 @@ def check_component_area_repainted(data, scene, canvas):
 
     failures = []
     for component in opaque:
-        sampled = concept_sample.median_color(data, component["box"], canvas)
-        if not sampled or concept_sample.differs(component["color"], sampled):
+        # Read where only the fill is (a ring for a circle, an edge band for a
+        # panel), so a pictogram or the words in the middle neither hide a baked
+        # copy nor read as a different colour.
+        shape = {"kind": component["shape"], "radius": component.get("radius", 0),
+                 **component["box"]}
+        sample = concept_sample.fill_color(data, shape, canvas)
+        if not sample or concept_sample.differs(component["color"], sample["color"]):
             continue
         # The colour matching is not enough on its own: a dark circle over dark
         # photography matches, and failing the job for that costs a finished
         # design. A shape still painted here is flat; repainted photography is
-        # not, so the variation decides.
-        spread = concept_sample.color_spread(data, component["box"], canvas)
-        if spread is None or spread > concept_sample.FLAT_SPREAD:
+        # not, so how uniform the sample is decides.
+        if sample["spread"] > concept_sample.FLAT_SPREAD:
             continue
-        failures.append({**component, "sampled": sampled, "spread": round(spread, 2)})
+        failures.append({**component, "sampled": sample["color"],
+                         "spread": sample["spread"]})
 
     if failures:
         error = InvalidTransparency(
