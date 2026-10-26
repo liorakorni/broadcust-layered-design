@@ -1,0 +1,97 @@
+{
+ "approved": false,
+ "route": "noProgress",
+ "blockingIssues": [
+  {
+   "code": "HEADLINE_EMPHASIS_LOSS",
+   "category": "visual",
+   "severity": "blocking",
+   "affected": "The two-line headline hierarchy",
+   "impact": "At feed size, the photograph dominates more strongly and the headline loses the oversized, tightly packed emphasis that defines the approved composition.",
+   "message": "The two-line headline hierarchy: At feed size, the photograph dominates more strongly and the headline loses the oversized, tightly packed emphasis that defines the approved composition. Fix: Increase both headline sizes and tighten tracking to recover their intended footprint while preserving the outline, RTL order, and separation from the photograph.",
+   "repairTarget": "typography",
+   "affectedElementIds": [
+    "text-primary",
+    "text-secondary"
+   ],
+   "constraints": [
+    {
+     "elementId": "text-primary",
+     "property": "fontSize",
+     "value": "132"
+    },
+    {
+     "elementId": "text-primary",
+     "property": "letterSpacing",
+     "value": "-10"
+    },
+    {
+     "elementId": "text-secondary",
+     "property": "fontSize",
+     "value": "102"
+    },
+    {
+     "elementId": "text-secondary",
+     "property": "letterSpacing",
+     "value": "-4"
+    }
+   ],
+   "region": {
+    "height": 0.225,
+    "width": 0.512,
+    "x": 0.099,
+    "y": 0.157
+   },
+   "layerId": "text-primary",
+   "assetId": null
+  },
+  {
+   "code": "INSUFFICIENT_TEXT_FIELD_DARKENING",
+   "category": "visual",
+   "severity": "blocking",
+   "affected": "The dark left panel and its transition into the photograph",
+   "impact": "The intended quiet, nearly black text column becomes a busy photographic area. This materially changes the panel silhouette and makes the small body copy compete with background detail at feed size.",
+   "message": "The dark left panel and its transition into the photograph: The intended quiet, nearly black text column becomes a busy photographic area. This materially changes the panel silhouette and makes the small body copy compete with background detail at feed size. Fix: Strengthen and broaden the existing left-to-right readability gradient rather than regenerating the photograph.",
+   "repairTarget": "layout",
+   "affectedElementIds": [
+    "shape-effect-photo-darkening"
+   ],
+   "constraints": [
+    {
+     "elementId": "shape-effect-photo-darkening",
+     "property": "color",
+     "value": "#000000"
+    },
+    {
+     "elementId": "shape-effect-photo-darkening",
+     "property": "angle",
+     "value": "90"
+    },
+    {
+     "elementId": "shape-effect-photo-darkening",
+     "property": "gradientStrength",
+     "value": "1"
+    },
+    {
+     "elementId": "shape-effect-photo-darkening",
+     "property": "width",
+     "value": "750"
+    },
+    {
+     "elementId": "shape-effect-photo-darkening",
+     "property": "opacity",
+     "value": "1"
+    }
+   ],
+   "region": {
+    "height": 0.81,
+    "width": 0.648,
+    "x": 0.0,
+    "y": 0.1
+   },
+   "layerId": "shape-effect-photo-darkening",
+   "assetId": null
+  }
+ ],
+ "warnings": []
+}

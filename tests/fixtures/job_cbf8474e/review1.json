@@ -1,0 +1,78 @@
+{
+ "approved": false,
+ "route": "light",
+ "blockingIssues": [
+  {
+   "code": "MISSING_TEXT_SIDE_DARKENING",
+   "category": "visual",
+   "severity": "blocking",
+   "affected": "Left-side text background and overall visual hierarchy",
+   "impact": "The equipment and window compete with the copy, particularly at 360px. This materially replaces the concept's quiet, high-contrast text column with a busy photographic background and exposes an unintended irregular black strip along the left edge.",
+   "message": "Left-side text background and overall visual hierarchy: The equipment and window compete with the copy, particularly at 360px. This materially replaces the concept's quiet, high-contrast text column with a busy photographic background and exposes an unintended irregular black strip along the left edge. Fix: Restore left-to-right darkening behind the text, keeping the right-side subject visible. Use a code-owned gradient rather than regenerating the photograph.",
+   "repairTarget": "layout",
+   "affectedElementIds": [
+    "add:effect-photo-darkening"
+   ],
+   "constraints": [
+    {
+     "elementId": "add:effect-photo-darkening",
+     "property": "addShape",
+     "value": "gradient-left"
+    }
+   ],
+   "region": {
+    "height": 0.84,
+    "width": 0.62,
+    "x": 0.0,
+    "y": 0.08
+   },
+   "layerId": "background-photo",
+   "assetId": null
+  }
+ ],
+ "warnings": [
+  {
+   "code": "HEADLINES_LESS_PROMINENT",
+   "category": "visual",
+   "severity": "warning",
+   "affected": "Primary and secondary headline typography",
+   "impact": "The headline remains readable and retains its hierarchy, but its compact, oversized visual character is somewhat weakened.",
+   "message": "Primary and secondary headline typography: The headline remains readable and retains its hierarchy, but its compact, oversized visual character is somewhat weakened. Fix: Modestly increase headline sizes while tightening letter spacing to retain the existing text-column width.",
+   "repairTarget": "typography",
+   "affectedElementIds": [
+    "text-primary",
+    "text-secondary"
+   ],
+   "constraints": [
+    {
+     "elementId": "text-primary",
+     "property": "fontSize",
+     "value": "124"
+    },
+    {
+     "elementId": "text-primary",
+     "property": "letterSpacing",
+     "value": "-6"
+    },
+    {
+     "elementId": "text-secondary",
+     "property": "fontSize",
+     "value": "100"
+    },
+    {
+     "elementId": "text-secondary",
+     "property": "letterSpacing",
+     "value": "-5"
+    }
+   ],
+   "region": {
+    "height": 0.22,
+    "width": 0.51,
+    "x": 0.1,
+    "y": 0.16
+   },
+   "layerId": "text-primary",
+   "assetId": null
+  }
+ ]
+}

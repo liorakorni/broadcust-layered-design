@@ -145,8 +145,15 @@ def job_exists(job_id):
 
 
 def create_job(job_id, owner_scope, request_hash, request_key, canvas,
-               design_freedom=0, review_strictness=None, flow="legacy"):
-    """Record the job as QUEUED before any execution starts."""
+               design_freedom=0, review_strictness=None, flow="legacy",
+               layout_policy=None):
+    """Record the job as QUEUED before any execution starts.
+
+    `layout_policy` is the direction policy resolved once at acceptance
+    (lib/direction_policy.resolve_for_request). A job created without one - one
+    accepted before it existed - keeps resolving its direction the way it always
+    did; it is never reinterpreted.
+    """
     from lib import reference_policy, review_policy
 
     if review_strictness is None:
@@ -199,6 +206,7 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
             # simple conditional update.
             **{f"repairs_{category}": 0 for category in REPAIR_CATEGORIES},
             "flow": flow,
+            **({"layoutPolicy": layout_policy} if layout_policy else {}),
             "createdAt": _now(),
             "updatedAt": _now(),
             "expiresAt": _ttl(),
@@ -610,8 +618,9 @@ def bump_counter(job_id, field, limit):
         raise
 
 
-def mark_succeeded(job_id, result_key, html_hash, manifest_hash):
-    """Terminal success.
+def mark_succeeded(job_id, result_key, html_hash, manifest_hash, *,
+                   status=None, outcome=None):
+    """Terminal success, with or without warnings.
 
     Called only after every final artifact is durable and the hashes match
     (SPEC section 4).
@@ -619,23 +628,37 @@ def mark_succeeded(job_id, result_key, html_hash, manifest_hash):
     Removes `expiresAt`: a saved design must stay retrievable by jobId after the
     30-day window that applies to diagnostic and failed jobs. Without this the
     status call would answer JOB_NOT_FOUND for a design whose files still exist.
+    A design delivered with warnings is kept for the same reason: it exists to be
+    opened and fixed by hand.
+
+    `outcome` is the small summary status polling needs without opening the result
+    (`stopReason`, `needsReview`, `publishReady`); it is also cleared of any error
+    an earlier failed attempt recorded, since the job did deliver.
     """
+    status = status or Status.SUCCEEDED
+    if status not in Status.DELIVERED:
+        raise ValueError(f"{status!r} is not a delivered status")
+    names = {"#s": "status"}
+    values = {
+        ":ok": status,
+        ":rk": result_key,
+        ":hh": html_hash,
+        ":mh": manifest_hash,
+        ":stage": "FINALIZE",
+        ":now": _now(),
+    }
+    expression = (
+        "SET #s = :ok, resultKey = :rk, htmlHash = :hh, "
+        "assetManifestHash = :mh, stage = :stage, updatedAt = :now"
+    )
+    if outcome:
+        expression += ", outcome = :outcome"
+        values[":outcome"] = outcome
     _tbl().update_item(
         Key={"pk": f"JOB#{job_id}"},
-        UpdateExpression=(
-            "SET #s = :ok, resultKey = :rk, htmlHash = :hh, "
-            "assetManifestHash = :mh, stage = :stage, updatedAt = :now "
-            "REMOVE expiresAt"
-        ),
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={
-            ":ok": Status.SUCCEEDED,
-            ":rk": result_key,
-            ":hh": html_hash,
-            ":mh": manifest_hash,
-            ":stage": "FINALIZE",
-            ":now": _now(),
-        },
+        UpdateExpression=expression + " REMOVE expiresAt",
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
     )
 
 

@@ -91,6 +91,14 @@ _COMPACT_FIELDS = (
     "reviewStrictness",
     "htmlHash",
     "assetManifestHash",
+    # Whether the design may be published as it stands. A caller that reads only
+    # the compact result must still be able to tell a clean success from a design
+    # delivered with unresolved findings.
+    "qualityPassed",
+    "needsReview",
+    "publishReady",
+    "stopReason",
+    "selectedAttempt",
 )
 
 

@@ -283,16 +283,55 @@ def _record_failure(job_id, failure):
             # pipeline, the operation says which bounded piece of work it was.
             error["operation"] = operation
 
-    jobs.mark_failed(job_id, error)
+    salvaged = _salvage(job_id, error)
+    if not salvaged:
+        jobs.mark_failed(job_id, error)
     log.info(
         json.dumps({
             "jobId": job_id,
             "recordedFailure": error["code"],
             "stage": error["stage"],
             "operation": error.get("operation"),
+            "salvaged": salvaged,
         })
     )
-    return {"ok": True, "stage": Stage.FINALIZE, "artifacts": {"error": error["code"]}}
+    # `salvaged` is always present: the workflow's FailureOutcome choice reads it,
+    # and a choice on an absent path fails the execution uncatchably.
+    return {"ok": True, "stage": Stage.FINALIZE,
+            "artifacts": {"error": error["code"], "salvaged": salvaged}}
+
+
+def _salvage(job_id, error):
+    """Deliver an earlier usable candidate instead of failing the job, if one exists.
+
+    A technical failure late in the pipeline - a repair that cannot be applied, a
+    render that crashes, a provider that times out - does not make an earlier,
+    intact candidate any less usable. When one exists it is finalised with the
+    original error kept in the result's diagnostics (`diagnostics.original`), and
+    the job ends SUCCEEDED_WITH_WARNINGS. When none does, or anything about the
+    attempt goes wrong, the original error is recorded as before: salvaging must
+    never replace the truth about what failed.
+    """
+    from lib import jobs
+    from lib.errors import Status
+
+    try:
+        job = jobs.get_job_unscoped(job_id)
+        if job.get("status") in Status.DELIVERED:
+            return False
+        from lib.stages import review
+
+        delivered = review.finalize_best_effort(
+            job_id, 1, stop_reason=error["code"],
+            detail={"code": error["code"], "message": error["message"],
+                    "stage": error["stage"], "operation": error.get("operation"),
+                    "category": error.get("category")},
+        )
+    except Exception as exc:
+        log.warning(json.dumps({"jobId": job_id, "salvage": "failed",
+                                "error": type(exc).__name__}))
+        return False
+    return delivered is not None
 
 
 #: Lambda surfaces a raised exception to Step Functions by class name, and the

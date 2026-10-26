@@ -1,0 +1,18 @@
+{
+ "touched": {
+  "changed": {
+   "effects": [
+    "owner"
+   ],
+   "shape-effect-photo-darkening": [
+    "added"
+   ]
+  },
+  "styleChanged": [
+   "shape-effect-photo-darkening"
+  ]
+ },
+ "imageGenerationCalls": 0,
+ "assetsPreserved": true,
+ "assetsHash": "b84ff1882b47fc686c9d6df20a60da07750a64627525ad0eee24d62e3ebf3d5c"
+}

@@ -71,7 +71,16 @@ def light(job_id, attempt, asset_id=None):
     pointer = design_state.current_pointer(job)
     if not pointer:
         raise AssetInvalid("There is no design snapshot to repair.")
-    base = design_state.load(job_id, pointer["key"])
+    # A verified regression sends the repair back to the better candidate instead of
+    # compounding the one that got worse. Only the scene it patches changes: the
+    # assets are the same in every candidate, which is checked below.
+    restore = routing.get("restoreBase")
+    if restore and restore.get("snapshotKey"):
+        base = design_state.load(job_id, restore["snapshotKey"])
+        design_state.require_assets_preserved(
+            design_state.load(job_id, pointer["key"]), base)
+    else:
+        base = design_state.load(job_id, pointer["key"])
     scene = design_state.scene_of(base)
     copy_items = artifacts.get_json(job_id, job["artifacts"][Stage.PREPARE_COPY]["copy"])["items"]
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
@@ -116,6 +125,10 @@ def light(job_id, attempt, asset_id=None):
         "invalidatedChecks": invalidated,
         "retainedChecks": sorted(set(dependencies.ALL_CHECKS) - set(invalidated)),
         "baseSnapshotVersion": base["version"],
+        "restoredFrom": (
+            {"attempt": restore["attempt"], "snapshotKey": restore["snapshotKey"],
+             "because": restore.get("because")} if restore else None
+        ),
         "assetsHash": base["assets"]["hash"],
         "assetsPreserved": base["assets"]["hash"] == derived["assets"]["hash"],
         "patchDigest": routing.get("patchDigest"),

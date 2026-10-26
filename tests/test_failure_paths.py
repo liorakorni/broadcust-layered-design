@@ -307,8 +307,9 @@ def test_finalize_refuses_a_blocked_design(pipeline, monkeypatch):
 
 
 def test_the_terminal_correct_step_never_regenerates_and_names_why(pipeline):
-    """CORRECT no longer advances to another full pass. It ends the loop with a
-    specific diagnostic and spends nothing, however often it is invoked."""
+    """CORRECT no longer advances to another full pass, and no longer fails a design
+    that exists. It ends the loop by delivering the best usable candidate with the
+    reason recorded, and spends nothing, however often it is invoked."""
     through(pipeline, Stage.REVIEW)
     job_id = pipeline["jobId"]
     review_key = pipeline["table"].items[f"JOB#{job_id}"]["artifacts"][Stage.REVIEW]["review"]
@@ -321,11 +322,18 @@ def test_the_terminal_correct_step_never_regenerates_and_names_why(pipeline):
     artifacts.put_json(stuck_key, stuck)
     pipeline["table"].items[f"JOB#{job_id}"]["artifacts"][Stage.REVIEW]["review"] = stuck_key
     rounds = pipeline["table"].items[f"JOB#{job_id}"].get("correctionRounds", 0)
+    calls = pipeline["table"].items[f"JOB#{job_id}"]["metrics"].get("imageCalls", 0)
 
     for attempt in (1, 2, 3):
-        with pytest.raises(CorrectionExhausted, match="repair budget is spent"):
-            handler_correct(job_id, attempt)
-    assert pipeline["table"].items[f"JOB#{job_id}"].get("correctionRounds", 0) == rounds
+        handler_correct(job_id, attempt)
+
+    job = pipeline["table"].items[f"JOB#{job_id}"]
+    assert job["correctionRounds"] == rounds if "correctionRounds" in job else True
+    assert job["metrics"].get("imageCalls", 0) == calls
+    result = artifacts.get_json(job_id, job["resultKey"])
+    assert job["status"] == "SUCCEEDED_WITH_WARNINGS"
+    assert result["stopReason"] == "CORRECTION_EXHAUSTED"
+    assert "repair budget is spent" in result["diagnostics"]["original"]["message"]
 
 
 def handler_correct(job_id, attempt):

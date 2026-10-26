@@ -80,15 +80,27 @@ class Stage:
 
 
 class Status:
-    """Job statuses. SPEC section 2.4 allows exactly these four."""
+    """Job statuses. SPEC section 2.4 allowed exactly four; a fifth was added so a
+    usable-but-unresolved design is not reported as either a clean success or a
+    failure.
+
+    SUCCEEDED                 usable output, and every quality requirement passed
+    SUCCEEDED_WITH_WARNINGS   usable output exists, but a quality requirement is
+                              unresolved or processing ended early; the result says
+                              which, and `publishReady` is false
+    FAILED                    no usable candidate could be returned
+    """
 
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
+    SUCCEEDED_WITH_WARNINGS = "SUCCEEDED_WITH_WARNINGS"
     FAILED = "FAILED"
 
-    ALL = (QUEUED, RUNNING, SUCCEEDED, FAILED)
-    TERMINAL = (SUCCEEDED, FAILED)
+    ALL = (QUEUED, RUNNING, SUCCEEDED, SUCCEEDED_WITH_WARNINGS, FAILED)
+    #: Statuses that carry a stored result a caller can open and edit.
+    DELIVERED = (SUCCEEDED, SUCCEEDED_WITH_WARNINGS)
+    TERMINAL = (SUCCEEDED, SUCCEEDED_WITH_WARNINGS, FAILED)
 
 
 class Code:

@@ -46,17 +46,78 @@ VALUES = ("auto", "rtl", "ltr")
 POLICIES = ("adapt-to-locale", "preserve")
 
 
+def resolve_for_request(request):
+    """Resolve the policy once, from the request alone, at acceptance.
+
+    Every stage after acceptance - concept generation, review, decomposition,
+    assembly and repair - has to work to the same answer, and the approved copy
+    does not exist yet at that point. The locale is therefore read from what the
+    request itself carries: the required texts when it supplies them, otherwise
+    the brief's own prose. The result is persisted on the job (`layoutPolicy`) and
+    never recomputed, so a later stage cannot reach a different conclusion from a
+    different input, and a job already accepted is never reinterpreted.
+
+    Adds to `resolve`'s result the explicit `placementConstraints` found in the
+    brief and `resolvedAt`, which marks the document as the acceptance-time one.
+    """
+    brief = request.get("brief") or {}
+    required = [t for t in (brief.get("requiredTexts") or []) if isinstance(t, str)]
+    sources = required or [
+        brief[key] for key in ("post", "instructions") if isinstance(brief.get(key), str)
+    ]
+    resolved = _resolve(request, "rtl" if any(RTL_SCRIPT.search(t) for t in sources) else "ltr")
+    resolved["placementConstraints"] = placement_constraints(request)
+    resolved["resolvedAt"] = "acceptance"
+    return resolved
+
+
+#: What a placement phrase asks for, by the word that matched. Anything not listed
+#: still counts as an explicit placement instruction; it just names no side.
+_SIDES = (
+    (re.compile(r"left|שמאל", re.IGNORECASE), "left"),
+    (re.compile(r"right|ימין", re.IGNORECASE), "right"),
+)
+
+
+def placement_constraints(request):
+    """Every explicit placement instruction in the brief, as structured records.
+
+    `[{"phrase", "side", "kind"}]`, empty when the brief places nothing. Kept as
+    data rather than only as a reason string, so a later stage can honour the
+    instruction without parsing prose.
+    """
+    brief = request.get("brief") or {}
+    text = " ".join(str(v) for v in brief.values() if isinstance(v, str))
+    found = []
+    for match in _PLACEMENT.finditer(text):
+        phrase = match.group(0)
+        side = next((name for pattern, name in _SIDES if pattern.search(phrase)), None)
+        kind = "placement" if side else (
+            "mirror" if re.search(r"mirror|flip|היפוך|להפוך", phrase, re.IGNORECASE)
+            else "preserve")
+        record = {"phrase": phrase, "side": side, "kind": kind}
+        if record not in found:
+            found.append(record)
+    return found
+
+
 def resolve(request, copy_items):
     """Return the resolved direction policy for a request.
 
     `{layoutDirection, textDirection, referenceLayoutPolicy, locale, reason,
     source}`. `source` is why: "request", "brief", "reference-policy" or
     "locale-default", in precedence order.
+
+    Kept for jobs accepted before the policy was persisted at acceptance, and for
+    callers that already hold the approved copy.
     """
+    return _resolve(request, "rtl" if has_rtl(copy_items) else "ltr")
+
+
+def _resolve(request, locale):
     policy = request.get("referenceLayoutPolicy") or "adapt-to-locale"
     requested_layout = request.get("layoutDirection") or "auto"
     requested_text = request.get("textDirection") or "auto"
-    locale = "rtl" if has_rtl(copy_items) else "ltr"
 
     text = requested_text if requested_text != "auto" else locale
 

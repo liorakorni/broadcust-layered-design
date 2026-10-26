@@ -553,7 +553,7 @@
     "Correct": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
-      "Comment": "Terminal precise-failure step for a review that cannot be repaired within budget (unresolved, exhausted or no progress). It records diagnostics and raises a specific error naming the preserved candidate; it never regenerates anything.",
+      "Comment": "Terminal step for a review that cannot be repaired within budget (unresolved, exhausted or no progress). It never regenerates anything. It delivers the best usable candidate with its unresolved findings (SUCCEEDED_WITH_WARNINGS, publishReady false) and records why; only when no candidate is usable does it raise the precise error, which RecordFailure persists.",
       "Parameters": {
         "jobId.$": "$.jobId",
         "stage": "REVIEW",
@@ -571,7 +571,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "Failed"
+      "Next": "Succeeded"
     },
     "Finalize": {
       "Type": "Task",
@@ -600,7 +600,7 @@
     "RecordFailure": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
-      "Comment": "Persists the terminal stage/code/message on the job so getLayeredDesignStatus can report it.",
+      "Comment": "Persists the terminal stage/code/message on the job so getLayeredDesignStatus can report it - unless an earlier usable candidate could be delivered instead, in which case the job is SUCCEEDED_WITH_WARNINGS with the original error in its diagnostics. Always returns artifacts.salvaged.",
       "Parameters": {
         "jobId.$": "$.jobId",
         "stage": "FINALIZE",
@@ -619,7 +619,7 @@
           "Next": "Failed"
         }
       ],
-      "Next": "Failed"
+      "Next": "FailureOutcome"
     },
     "Failed": {
       "Type": "Fail",
@@ -855,6 +855,18 @@
         }
       ],
       "Comment": "Layout-first: the only generated image."
+    },
+    "FailureOutcome": {
+      "Type": "Choice",
+      "Comment": "RecordFailure always answers artifacts.salvaged (a choice on an absent path fails the execution uncatchably). A salvaged job delivered a design, so the execution succeeds; otherwise it fails.",
+      "Choices": [
+        {
+          "Variable": "$.recorded.artifacts.salvaged",
+          "BooleanEquals": true,
+          "Next": "Succeeded"
+        }
+      ],
+      "Default": "Failed"
     }
   }
 }

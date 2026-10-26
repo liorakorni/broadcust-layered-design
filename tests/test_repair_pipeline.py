@@ -107,7 +107,9 @@ def drive(p, max_loops=8):
     """The state machine's loop: repair by the recorded route until it ends.
 
     Returns the list of (attempt, route) decisions. A non-repairable route ends the
-    loop the way the workflow's Correct state does: by raising its precise error.
+    loop the way the workflow's Correct state does: by delivering the best usable
+    candidate with its unresolved findings (status SUCCEEDED_WITH_WARNINGS), or by
+    raising its precise error when no candidate is usable.
     """
     decisions = []
     attempt = 1
@@ -132,9 +134,15 @@ def drive(p, max_loops=8):
             run_stage(p["jobId"], Stage.VALIDATE_ASSETS, attempt=attempt)
             out = review_pass(p, attempt)
         else:
-            op(p, "CORRECT", attempt)       # raises the precise terminal error
-            raise AssertionError("CORRECT must raise for a non-repairable route")
+            op(p, "CORRECT", attempt)       # delivers the best candidate, flagged
+            return decisions
     raise AssertionError("the loop did not end")
+
+
+def delivered(p):
+    """`(status, result)` of a job that ended by delivering a candidate."""
+    job = job_of(p)
+    return job["status"], artifacts.get_json(p["jobId"], job["resultKey"])
 
 
 def image_calls(p):
@@ -660,14 +668,20 @@ def test_an_unknown_or_inconsistent_classification_never_triggers_regeneration(s
     assert out["route"] == "unresolved"
     calls = image_calls(script)
 
-    with pytest.raises(RepairRouteUnresolved) as exc:
-        op(script, "CORRECT", 1)
+    op(script, "CORRECT", 1)
 
-    assert why in " ".join(
-        p for r in out["routing"]["issues"] for p in r["problems"]) or why in exc.value.message
+    status, result = delivered(script)
+    # Nothing was regenerated; the design that exists is returned, flagged.
     assert image_calls(script) == calls
-    # The best candidate is preserved and named in the diagnostic.
-    assert "preserved" in exc.value.message
+    assert status == "SUCCEEDED_WITH_WARNINGS"
+    assert result["publishReady"] is False and result["needsReview"] is True
+    assert result["stopReason"] == "REPAIR_ROUTE_UNRESOLVED"
+    assert why in " ".join(
+        p for r in out["routing"]["issues"] for p in r["problems"]
+    ) or why in result["diagnostics"]["original"]["message"]
+    # The original reason is kept in the diagnostics, beside the candidate returned.
+    assert result["diagnostics"]["original"]["code"] == "REPAIR_ROUTE_UNRESOLVED"
+    assert result["diagnostics"]["selectedAttempt"] == 1
     assert job_of(script)["designCandidates"]["1"]["snapshotKey"]
 
 
@@ -786,13 +800,17 @@ def test_a_paid_stage_with_unchanged_inputs_is_answered_from_its_stored_output(s
 
 def test_repeated_identical_failures_terminate_within_the_repair_budget(script):
     script["script"].extend([[copy.deepcopy(OUTLINE)] for _ in range(6)])
-    with pytest.raises(RepairNoProgress) as exc:
-        drive(script)
+    drive(script)
     repairs = job_of(script)["metrics"]["lightRepairs"]
     assert repairs <= conf.MAX_REPAIRS["typography"]
-    assert "did not improve" in exc.value.message
+    status, result = delivered(script)
+    assert status == "SUCCEEDED_WITH_WARNINGS"
+    assert result["stopReason"] in ("REPAIR_NO_PROGRESS", "CORRECTION_EXHAUSTED")
+    assert "did not improve" in result["diagnostics"]["original"]["message"] or \
+        "bounded repairs" in result["diagnostics"]["original"]["message"]
     assert image_calls(script) == 3                          # the first pass only
-    assert exc.value.details["preservedCandidate"]["snapshotKey"]
+    assert result["selectedSnapshotKey"]
+    assert result["publishReady"] is False
 
 
 def test_each_repair_category_has_its_own_bounded_budget(script):
@@ -805,19 +823,107 @@ def test_each_repair_category_has_its_own_bounded_budget(script):
     script["script"].extend([[f, issue("OTHER", target="layout", affected=["t_sub"],
                                        constraints=[("t_sub", "y", str(330 + 10 * i))])]
                              for i, f in enumerate(findings)])
-    with pytest.raises((CorrectionExhausted, RepairNoProgress)):
-        drive(script)
+    drive(script)
     assert job_of(script)["metrics"]["lightRepairs"] <= conf.MAX_REPAIRS["layout"]
+    assert delivered(script)[0] == "SUCCEEDED_WITH_WARNINGS"
     assert image_calls(script) == 3
 
 
-def test_a_repair_that_makes_things_worse_is_not_built_on(script):
+def _verdict(code, reason="evidence"):
+    from lib import repair_progress
+
+    return {"verdict": code, "label": repair_progress.LABELS[code], "reason": reason,
+            "evidence": {}}
+
+
+def test_a_new_blocking_finding_is_not_by_itself_a_regression(script):
+    """The rule this replaces read a higher blocking count as damage done by the
+    repair. Nothing here shows damage - the render did not move - so the loop
+    carries on and the design is approved on the next review."""
     script["script"].append([OUTLINE])
     script["script"].append([copy.deepcopy(OUTLINE), issue(
         "NEW_PROBLEM", target="layout", affected=["t_sub"],
         constraints=[("t_sub", "y", "340")])])
-    with pytest.raises(RepairNoProgress, match="more blocking findings"):
-        drive(script)
+
+    decisions = drive(script)
+
+    assert [route for _, route in decisions] == ["light", "light", "approve"]
+    kept = job_of(script)["designCandidates"]
+    assert kept["2"]["blockingCount"] == 2 > kept["1"]["blockingCount"]
+    assert kept["2"]["progressVerdict"] in ("B", "C", "E")
+
+
+def test_a_partial_improvement_is_followed_by_another_bounded_repair(script, monkeypatch):
+    """The same finding on the same element is no longer 'the same failure' when
+    the render measurably moved towards the concept: a different patch is tried."""
+    from lib.stages import review as review_stage
+
+    stronger = issue("HEADLINE_OUTLINE_MISSING", target="typography", affected=["t_title"],
+                     constraints=[("t_title", "strokeColor", "#FFFFFF"),
+                                  ("t_title", "strokeWidth", "5")])
+    script["script"].append([OUTLINE])
+    script["script"].append([stronger])
+    monkeypatch.setattr(review_stage, "_progress", lambda *a, **k: _verdict("B"))
+
+    decisions = drive(script)
+
+    assert [route for _, route in decisions] == ["light", "light", "approve"]
+    assert job_of(script)["designCandidates"]["2"]["progressVerdict"] == "B"
+    assert image_calls(script) == 3                  # none spent on the repairs
+
+
+def test_a_repair_that_changed_nothing_visible_still_stops(script, monkeypatch):
+    from lib.stages import review as review_stage
+
+    other = issue("HEADLINE_OUTLINE_MISSING", target="typography", affected=["t_title"],
+                  constraints=[("t_title", "strokeColor", "#FFFFFF"),
+                               ("t_title", "strokeWidth", "5")])
+    script["script"].append([OUTLINE])
+    script["script"].append([other])
+    monkeypatch.setattr(review_stage, "_progress", lambda *a, **k: _verdict("C"))
+
+    drive(script)
+
+    status, result = delivered(script)
+    assert status == "SUCCEEDED_WITH_WARNINGS"
+    assert result["stopReason"] == "REPAIR_NO_PROGRESS"
+    assert "no meaningful change" in result["diagnostics"]["original"]["message"]
+
+
+def test_a_verified_regression_restores_the_better_candidate_once(script, monkeypatch):
+    from lib.stages import review as review_stage
+
+    script["script"].append([OUTLINE])
+    script["script"].append([issue("WORSE", target="layout", affected=["t_sub"],
+                                   constraints=[("t_sub", "y", "340")])])
+    seen = []
+
+    def progress(job, candidates, previous, *a, **k):
+        seen.append(previous["attempt"])
+        return _verdict("D", "the patched region moved further from the concept")
+
+    monkeypatch.setattr(review_stage, "_progress", progress)
+    first_pass(script)
+    attempt = op(script, "REPAIR_LIGHT", 1)["nextAttempt"]
+    out = review_pass(script, attempt)
+
+    # Attempt 2 verifiably regressed: the next repair starts from attempt 1.
+    assert out["route"] == "light"
+    review = artifacts.get_json(
+        script["jobId"], job_of(script)["artifacts"][Stage.REVIEW]["review"])
+    restore = review["routing"]["restoreBase"]
+    assert restore["attempt"] == 1
+    op(script, "REPAIR_LIGHT", attempt)
+    record = artifacts.get_json(script["jobId"], artifacts.artifact_key(
+        script["jobId"], Stage.REPAIR, attempt, "repair.json"))
+    assert record["restoredFrom"]["attempt"] == 1
+
+    # A second verified regression ends it: no unbounded retrying.
+    script["script"].append([issue("WORSE_AGAIN", target="layout", affected=["t_sub"],
+                                   constraints=[("t_sub", "y", "360")])])
+    later = op(script, "REPAIR_LIGHT", attempt)["nextAttempt"]
+    out = review_pass(script, later)
+    assert out["route"] == "noProgress"
 
 
 def test_the_delivered_candidate_is_the_best_eligible_one_not_the_latest(script):
@@ -834,7 +940,9 @@ def test_the_delivered_candidate_is_the_best_eligible_one_not_the_latest(script)
 
 def test_a_candidate_with_missing_mandatory_text_is_never_selected():
     ok = {"attempt": 1, "approved": True, "mandatoryContentOk": False, "blockingCount": 0,
-          "warningCount": 0, "route": "approve", "pointers": {}}
+          "warningCount": 0, "route": "approve", "htmlHash": "h", "snapshotKey": "s",
+          "pointers": {"ASSEMBLE": {"html": "h", "scene": "s", "assets": [{}]},
+                       "RENDER": {"native": "n"}}}
     assert candidates.select_deliverable([ok]) is None
     better = {**ok, "attempt": 2, "mandatoryContentOk": True, "warningCount": 2}
     assert candidates.select_deliverable([ok, better])["attempt"] == 2
@@ -1622,9 +1730,9 @@ def test_an_unsupported_property_is_rejected_by_name(script):
     # names the property rather than regenerating anything.
     with pytest.raises(RepairRouteUnresolved):
         op(script, "REPAIR_LIGHT", 1)
-    with pytest.raises(RepairRouteUnresolved) as raised:
-        op(script, "CORRECT", 1)
-    assert "textShadow" in raised.value.message
+    op(script, "CORRECT", 1)
+    _, result = delivered(script)
+    assert "textShadow" in result["diagnostics"]["original"]["message"]
 
 
 def test_an_edit_that_changes_nothing_is_reported_as_a_no_op(script):

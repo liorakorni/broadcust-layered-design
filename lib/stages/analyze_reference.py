@@ -137,7 +137,10 @@ def run(job_id, attempt, asset_id=None):
 
     # Resolved before the reference is even analysed, so the analysis, the
     # concept and its review all work to the same direction.
-    direction = direction_policy.resolve(request, copy_items)
+    # The acceptance-time resolution when the job has one, so this stage cannot
+    # reach a different answer from the approved copy than the request already
+    # settled. A job accepted before that existed resolves as it always did.
+    direction = job.get("layoutPolicy") or direction_policy.resolve(request, copy_items)
     policy = reference_policy.derive_reference_policy(
         request.get("designFreedom", 0),
         request.get("reviewStrictness", review_policy.DEFAULT_STRICTNESS),

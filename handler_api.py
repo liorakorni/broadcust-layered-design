@@ -19,7 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import conf
-from lib import artifacts, bedrock, jobs
+from lib import artifacts, bedrock, direction_policy, jobs
 from lib.errors import (
     Code,
     InvalidRequest,
@@ -146,6 +146,9 @@ def run_layered_design(payload, caller_context):
             design_freedom=request.designFreedom,
             review_strictness=request.reviewStrictness,
             flow=request.designFlow,
+            # Resolved once, here: every later stage reads this document.
+            layout_policy=direction_policy.resolve_for_request(
+                request.model_dump(mode="json")),
         )
 
     _ensure_execution(job_id, request.designFlow)
@@ -180,7 +183,7 @@ def export_layered_design(payload, caller_context):
     if not isinstance(payload, dict) or not isinstance(payload.get("jobId"), str):
         raise InvalidRequest("jobId is required.")
     job = jobs.get_job(payload["jobId"], owner_scope)  # ownership + existence
-    if job.get("status") != "SUCCEEDED":
+    if job.get("status") not in Status.DELIVERED:
         raise design_edit.DesignNotEditable("Only a finished design can be exported.")
     response = boto3.client("lambda", region_name=conf.AWS_REGION).invoke(
         FunctionName=conf.STAGE_FUNCTION_NAME,
@@ -265,10 +268,30 @@ def get_layered_design_status(job_id, caller_context):
         }
         return response
 
-    if status == Status.SUCCEEDED:
+    if status in Status.DELIVERED:
+        # Never report a delivered design that cannot actually be opened: the
+        # status is written only after the result is durable, so a missing or
+        # unreadable result is an integrity fault and is said to be one.
         result_key = item.get("resultKey")
-        if result_key:
-            response["result"] = artifacts.get_json(job_id, result_key)
+        try:
+            result = artifacts.get_json(job_id, result_key) if result_key else None
+        except Exception:
+            result = None
+        if not isinstance(result, dict) or not result.get("html"):
+            response["status"] = Status.FAILED
+            response["error"] = {
+                "stage": Stage.FINALIZE,
+                "code": Code.INTERNAL,
+                "message": "The job is recorded as finished but its result could not be read.",
+                "retryable": False,
+            }
+            return response
+        response["result"] = result
+        outcome = item.get("outcome")
+        if outcome:
+            # The same few facts, without opening the (large) result: enough for a
+            # poller to decide whether a human must look before anything is published.
+            response["outcome"] = outcome
         return response
 
     # Report the real stage rather than a fabricated percentage (SPEC 2.4).

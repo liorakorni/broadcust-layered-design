@@ -253,3 +253,78 @@ def test_an_unknown_direction_value_is_refused(start_payload, field, value):
 
     with pytest.raises(InvalidRequest):
         parse_start_request({**copy.deepcopy(start_payload), field: value})
+
+
+# --- resolved once, at acceptance ------------------------------------------------
+
+#: The brief of the live job that failed review (cbf8474e...). It asks for the text
+#: "בצד שמאל" - left - so the composition follows the brief, not the locale. That
+#: was the right reading of that brief; the fixture below it is the corrected one.
+FAILING_BRIEF = {
+    "post": "פוסט שיווקי לאימוני כושר אישיים.",
+    "instructions": ("צור פוסט בעברית בהיצמדות מרבית למבנה ולסגנון של הרפרנס. "
+                     "טקסט בצד שמאל ומוקד צילומי בצד ימין. "
+                     "הטקסט בעברית יהיה בכיוון RTL, ללא היפוך כל הקומפוזיציה."),
+    "requiredTexts": ["אימון אישי", "אצלכם בבית"],
+}
+
+#: The same request with the placement instruction removed.
+CORRECTED_BRIEF = {
+    "post": "פוסט שיווקי לאימוני כושר אישיים.",
+    "instructions": ("צור פוסט בעברית בהיצמדות מרבית למבנה ולסגנון של הרפרנס. "
+                     "הטקסט בעברית יהיה בכיוון RTL."),
+    "requiredTexts": ["אימון אישי", "אצלכם בבית"],
+}
+
+
+def test_the_acceptance_resolution_follows_the_brief_when_it_places_things():
+    resolved = direction_policy.resolve_for_request(request(brief=FAILING_BRIEF))
+
+    assert resolved["layoutDirection"] == "preserve-reference"
+    assert resolved["source"] == "brief"
+    assert resolved["resolvedAt"] == "acceptance"
+    sides = {c["side"] for c in resolved["placementConstraints"]}
+    assert {"left", "right"} <= sides
+    assert {c["kind"] for c in resolved["placementConstraints"]} >= {"placement", "mirror"}
+    assert "reason" in resolved and resolved["reason"]
+
+
+def test_the_corrected_hebrew_fixture_composes_right_to_left_from_the_start():
+    resolved = direction_policy.resolve_for_request(request(brief=CORRECTED_BRIEF))
+
+    assert resolved["layoutDirection"] == "rtl"
+    assert resolved["textDirection"] == "rtl"
+    assert resolved["referenceLayoutPolicy"] == "adapt-to-locale"
+    assert resolved["source"] == "locale-default"
+    assert resolved["placementConstraints"] == []
+    # The concept prompt carries it, so the concept begins right to left.
+    assert "text column sits on the RIGHT" in direction_policy.prompt_block(resolved)
+
+
+def test_an_explicit_request_field_still_beats_the_brief_at_acceptance():
+    resolved = direction_policy.resolve_for_request(
+        request(brief=FAILING_BRIEF, layoutDirection="rtl"))
+    assert resolved["layoutDirection"] == "rtl"
+    assert resolved["source"] == "request"
+
+
+def test_a_latin_request_resolves_left_to_right_without_any_copy():
+    resolved = direction_policy.resolve_for_request(request(
+        brief={"post": "A winter sale.", "instructions": None,
+               "requiredTexts": ["Winter sale", "Book now"]}))
+    assert resolved["layoutDirection"] == "ltr"
+
+
+def test_the_acceptance_resolution_is_persisted_and_the_stages_read_it(monkeypatch):
+    """Acceptance writes it onto the job; ANALYZE_REFERENCE uses it instead of
+    deciding again from the approved copy."""
+    import inspect
+
+    from lib import jobs
+    from lib.stages import analyze_reference
+
+    assert "layout_policy" in inspect.signature(jobs.create_job).parameters
+    source = inspect.getsource(analyze_reference.run)
+    assert 'job.get("layoutPolicy")' in source
+    # A job accepted before the field existed still resolves the old way.
+    assert "direction_policy.resolve(request, copy_items)" in source

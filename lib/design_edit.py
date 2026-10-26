@@ -112,7 +112,7 @@ def update(payload, owner_scope):
     """Apply one edit. Makes no image call and renders nothing."""
     job_id, request_id, expected, changes = parse_request(payload)
     job = jobs.get_job(job_id, owner_scope)
-    if job.get("status") != Status.SUCCEEDED:
+    if job.get("status") not in Status.DELIVERED:
         raise DesignNotEditable(
             "Only a finished design can be edited; this job is "
             f"{str(job.get('status')).lower()}."

@@ -1,0 +1,687 @@
+{
+ "canvas": {
+  "height": 1080,
+  "width": 1080
+ },
+ "components": [
+  {
+   "id": "component-photo",
+   "kind": "photo",
+   "layerId": "background-photo",
+   "note": "Full-canvas dark home-gym photograph: a man in black performs a one-arm dumbbell row on the right, braced on a black bench, with plants, weights and exercise equipment behind him. Includes the existing left-side readability shading.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-decoration",
+   "kind": "retainedRaster",
+   "layerId": "decoration-overlay",
+   "note": "Contains both irregular yellow torn-edge borders and their solid black exterior fields, plus all five upper-right downward chevrons: three hollow outlined ribbon silhouettes alternating with two solid rounded silhouettes. Excludes all editable text, the CTA pill, contact circles, contact pictograms and four dots.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-business",
+   "kind": "editableText",
+   "layerId": "text-business",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-primary",
+   "kind": "editableText",
+   "layerId": "text-primary",
+   "note": "Large hollow white headline with genuinely transparent letter interiors.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-secondary",
+   "kind": "editableText",
+   "layerId": "text-secondary",
+   "note": "Heavy solid yellow second headline.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-training",
+   "kind": "editableText",
+   "layerId": "text-training",
+   "note": "Two-line white paragraph.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-guidance",
+   "kind": "editableText",
+   "layerId": "text-guidance",
+   "note": "Separate two-line white paragraph.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-cta-text",
+   "kind": "editableText",
+   "layerId": "text-cta",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-phone-text",
+   "kind": "editableText",
+   "layerId": "text-phone",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-email-text",
+   "kind": "editableText",
+   "layerId": "text-email",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-cta-pill",
+   "kind": "editableShape",
+   "layerId": "cta-pill",
+   "note": null,
+   "pairsWith": "text-cta"
+  },
+  {
+   "id": "component-phone-circle",
+   "kind": "editableShape",
+   "layerId": "phone-circle",
+   "note": null,
+   "pairsWith": "text-phone"
+  },
+  {
+   "id": "component-email-circle",
+   "kind": "editableShape",
+   "layerId": "email-circle",
+   "note": null,
+   "pairsWith": "text-email"
+  },
+  {
+   "id": "component-phone-icon",
+   "kind": "rasterIcon",
+   "layerId": "phone-icon",
+   "note": "Black telephone handset, separate from its yellow circle.",
+   "pairsWith": "text-phone"
+  },
+  {
+   "id": "component-email-icon",
+   "kind": "rasterIcon",
+   "layerId": "email-icon",
+   "note": "Black envelope, separate from its yellow circle.",
+   "pairsWith": "text-email"
+  },
+  {
+   "id": "component-dot-top-left",
+   "kind": "editableShape",
+   "layerId": "dot-top-left",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-top-right",
+   "kind": "editableShape",
+   "layerId": "dot-top-right",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-bottom-left",
+   "kind": "editableShape",
+   "layerId": "dot-bottom-left",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-bottom-right",
+   "kind": "editableShape",
+   "layerId": "dot-bottom-right",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-shape-effect-photo-darkening",
+   "kind": "editableShape",
+   "layerId": "shape-effect-photo-darkening",
+   "note": "Added by the layout to draw effect-photo-darkening.",
+   "pairsWith": null
+  }
+ ],
+ "effects": [
+  {
+   "id": "effect-cta",
+   "kind": "ctaBackground",
+   "note": "Yellow rounded pill behind the black Hebrew call to action.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-phone-circle",
+   "kind": "badge",
+   "note": "Yellow circular backing for the black telephone handset.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-email-circle",
+   "kind": "badge",
+   "note": "Yellow circular backing for the black envelope.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-top-left",
+   "kind": "dots",
+   "note": "Upper-left dot of the four-dot square beside the bench.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-top-right",
+   "kind": "dots",
+   "note": "Upper-right dot of the four-dot square beside the bench.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-bottom-left",
+   "kind": "dots",
+   "note": "Lower-left dot of the four-dot square beside the bench.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-bottom-right",
+   "kind": "dots",
+   "note": "Lower-right dot of the four-dot square beside the bench.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-retained-chevron-stack",
+   "kind": "chevrons",
+   "note": "Five yellow downward motifs at the upper right: hollow rounded chevrons in boxes approximately (972,47,56,34), (972,137,56,34), and (972,228,56,33); solid rounded chevrons in boxes (972,92,56,33) and (972,182,56,34). Preserve as raster artwork because the hollow motifs have outlined ribbon silhouettes rather than simple single-stroke chevrons.",
+   "owner": "overlay"
+  },
+  {
+   "id": "effect-torn-edges",
+   "kind": "border",
+   "note": "Irregular yellow torn-edge strokes and the black exterior fields they enclose at the upper-left and along the bottom. The upper stroke runs from the left edge near y=132 to the top near x=266, with a small yellow continuation near x=303. The lower stroke rises irregularly from x=418 at the bottom through approximately (622,977), crosses below the athlete, and reaches the right edge near y=903.",
+   "owner": "overlay"
+  },
+  {
+   "id": "effect-photo-darkening",
+   "kind": "readabilityGradient",
+   "note": null,
+   "owner": "layout"
+  }
+ ],
+ "imageLayers": [
+  {
+   "assetId": null,
+   "height": 1080,
+   "id": "background-photo",
+   "objectFit": "cover",
+   "objectPosition": null,
+   "radius": null,
+   "type": "background",
+   "width": 1080,
+   "x": 0,
+   "y": 0,
+   "zIndex": 0
+  },
+  {
+   "assetId": null,
+   "height": 1080,
+   "id": "decoration-overlay",
+   "objectFit": "contain",
+   "objectPosition": null,
+   "radius": null,
+   "type": "decoration",
+   "width": 1080,
+   "x": 0,
+   "y": 0,
+   "zIndex": 1
+  },
+  {
+   "assetId": "icon-phone",
+   "height": 23,
+   "id": "phone-icon",
+   "objectFit": "contain",
+   "objectPosition": null,
+   "radius": null,
+   "type": "image",
+   "width": 21,
+   "x": 118,
+   "y": 875,
+   "zIndex": 12
+  },
+  {
+   "assetId": "icon-email",
+   "height": 18,
+   "id": "email-icon",
+   "objectFit": "contain",
+   "objectPosition": null,
+   "radius": null,
+   "type": "image",
+   "width": 23,
+   "x": 117,
+   "y": 923,
+   "zIndex": 12
+  }
+ ],
+ "overlaySamples": [
+  {
+   "height": 100,
+   "kind": "transparent",
+   "width": 100,
+   "x": 818,
+   "y": 350
+  },
+  {
+   "height": 100,
+   "kind": "transparent",
+   "width": 65,
+   "x": 860,
+   "y": 560
+  },
+  {
+   "height": 65,
+   "kind": "transparent",
+   "width": 45,
+   "x": 960,
+   "y": 740
+  },
+  {
+   "height": 50,
+   "kind": "transparent",
+   "width": 85,
+   "x": 850,
+   "y": 860
+  },
+  {
+   "height": 40,
+   "kind": "opaque",
+   "width": 130,
+   "x": 890,
+   "y": 1020
+  },
+  {
+   "height": 30,
+   "kind": "opaque",
+   "width": 100,
+   "x": 665,
+   "y": 1035
+  },
+  {
+   "height": 30,
+   "kind": "opaque",
+   "width": 95,
+   "x": 20,
+   "y": 15
+  }
+ ],
+ "shapeLayers": [
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFDC29",
+   "effect": "effect-cta",
+   "height": 72,
+   "id": "cta-pill",
+   "kind": "panel",
+   "opacity": 1.0,
+   "radius": 36,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 305,
+   "x": 111,
+   "y": 779,
+   "zIndex": 10
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFDB29",
+   "effect": "effect-phone-circle",
+   "height": 39,
+   "id": "phone-circle",
+   "kind": "circle",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 39,
+   "x": 109,
+   "y": 866,
+   "zIndex": 10
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#2B2105",
+   "effect": "effect-email-circle",
+   "height": 39,
+   "id": "email-circle",
+   "kind": "circle",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 39,
+   "x": 109,
+   "y": 912,
+   "zIndex": 10
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFDA2A",
+   "effect": "effect-dot-top-left",
+   "height": 16,
+   "id": "dot-top-left",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 16,
+   "x": 735,
+   "y": 872,
+   "zIndex": 10
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFDA2A",
+   "effect": "effect-dot-top-right",
+   "height": 16,
+   "id": "dot-top-right",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 16,
+   "x": 778,
+   "y": 872,
+   "zIndex": 10
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFDA2A",
+   "effect": "effect-dot-bottom-left",
+   "height": 17,
+   "id": "dot-bottom-left",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 16,
+   "x": 735,
+   "y": 914,
+   "zIndex": 10
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFDA2A",
+   "effect": "effect-dot-bottom-right",
+   "height": 17,
+   "id": "dot-bottom-right",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 16,
+   "x": 778,
+   "y": 914,
+   "zIndex": 10
+  },
+  {
+   "angle": 90,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": null,
+   "effect": "effect-photo-darkening",
+   "height": 1080,
+   "id": "shape-effect-photo-darkening",
+   "kind": "gradient",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [
+    {
+     "color": "#000000",
+     "opacity": 0.9,
+     "position": 0.0
+    },
+    {
+     "color": "#000000",
+     "opacity": 0.75,
+     "position": 0.55
+    },
+    {
+     "color": "#000000",
+     "opacity": 0.0,
+     "position": 1.0
+    }
+   ],
+   "type": "shape",
+   "width": 648,
+   "x": 0,
+   "y": 0,
+   "zIndex": 0
+  }
+ ],
+ "textLayers": [
+  {
+   "align": "left",
+   "color": "#F7F7F7",
+   "contentKey": "business.name",
+   "direction": "ltr",
+   "fill": "solid",
+   "fontFamily": "Heebo",
+   "fontSize": 42,
+   "fontWeight": 900,
+   "height": 53,
+   "id": "text-business",
+   "letterSpacing": 0.0,
+   "lineHeight": 1.1,
+   "overflow": "shrink",
+   "role": "businessName",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "FIT HOME",
+   "type": "text",
+   "width": 247,
+   "wrap": "nowrap",
+   "x": 111,
+   "y": 116,
+   "zIndex": 20
+  },
+  {
+   "align": "right",
+   "color": "#F5F5F5",
+   "contentKey": "title.primary",
+   "direction": "rtl",
+   "fill": "transparent",
+   "fontFamily": "Heebo",
+   "fontSize": 114,
+   "fontWeight": 900,
+   "height": 139,
+   "id": "text-primary",
+   "letterSpacing": -4.0,
+   "lineHeight": 1.0,
+   "overflow": "shrink",
+   "role": "title",
+   "strokeColor": "#F5F5F5",
+   "strokeWidth": 3.0,
+   "text": "אימון אישי",
+   "type": "text",
+   "width": 550,
+   "wrap": "nowrap",
+   "x": 107,
+   "y": 170,
+   "zIndex": 20
+  },
+  {
+   "align": "right",
+   "color": "#FFDA24",
+   "contentKey": "title.secondary",
+   "direction": "rtl",
+   "fill": "solid",
+   "fontFamily": "Heebo",
+   "fontSize": 91,
+   "fontWeight": 900,
+   "height": 111,
+   "id": "text-secondary",
+   "letterSpacing": -3.0,
+   "lineHeight": 1.0,
+   "overflow": "shrink",
+   "role": "subtitle",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "אצלכם בבית",
+   "type": "text",
+   "width": 535,
+   "wrap": "nowrap",
+   "x": 107,
+   "y": 301,
+   "zIndex": 20
+  },
+  {
+   "align": "right",
+   "color": "#F6F6F6",
+   "contentKey": "body.personalized_training",
+   "direction": "rtl",
+   "fill": "solid",
+   "fontFamily": "Heebo",
+   "fontSize": 36,
+   "fontWeight": 400,
+   "height": 87,
+   "id": "text-training",
+   "letterSpacing": -0.5,
+   "lineHeight": 1.12,
+   "overflow": "shrink",
+   "role": "benefitItem",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "אימוני כושר בהתאמה אישית לרמה, למטרות ולשגרה שלכם.",
+   "type": "text",
+   "width": 456,
+   "wrap": "wrap",
+   "x": 109,
+   "y": 460,
+   "zIndex": 20
+  },
+  {
+   "align": "right",
+   "color": "#F6F6F6",
+   "contentKey": "body.personal_guidance",
+   "direction": "rtl",
+   "fill": "solid",
+   "fontFamily": "Heebo",
+   "fontSize": 36,
+   "fontWeight": 400,
+   "height": 88,
+   "id": "text-guidance",
+   "letterSpacing": 0.0,
+   "lineHeight": 1.14,
+   "overflow": "shrink",
+   "role": "benefitItem",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "ליווי אישי, טכניקה נכונה והתמדה לאורך הדרך.",
+   "type": "text",
+   "width": 377,
+   "wrap": "wrap",
+   "x": 109,
+   "y": 586,
+   "zIndex": 20
+  },
+  {
+   "align": "right",
+   "color": "#070704",
+   "contentKey": "cta.primary",
+   "direction": "rtl",
+   "fill": "solid",
+   "fontFamily": "Heebo",
+   "fontSize": 30,
+   "fontWeight": 800,
+   "height": 43,
+   "id": "text-cta",
+   "letterSpacing": -0.7,
+   "lineHeight": 1.1,
+   "overflow": "shrink",
+   "role": "cta",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "לתיאום אימון היכרות",
+   "type": "text",
+   "width": 260,
+   "wrap": "nowrap",
+   "x": 134,
+   "y": 794,
+   "zIndex": 20
+  },
+  {
+   "align": "left",
+   "color": "#F6F6F6",
+   "contentKey": "contact.phone",
+   "direction": "ltr",
+   "fill": "solid",
+   "fontFamily": "Arial",
+   "fontSize": 30,
+   "fontWeight": 400,
+   "height": 36,
+   "id": "text-phone",
+   "letterSpacing": 0.0,
+   "lineHeight": 1.1,
+   "overflow": "shrink",
+   "role": "userInformation",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "050-1234567",
+   "type": "text",
+   "width": 225,
+   "wrap": "nowrap",
+   "x": 159,
+   "y": 872,
+   "zIndex": 20
+  },
+  {
+   "align": "left",
+   "color": "#F6F6F6",
+   "contentKey": "contact.email",
+   "direction": "ltr",
+   "fill": "solid",
+   "fontFamily": "Arial",
+   "fontSize": 29,
+   "fontWeight": 400,
+   "height": 37,
+   "id": "text-email",
+   "letterSpacing": 0.0,
+   "lineHeight": 1.1,
+   "overflow": "shrink",
+   "role": "userInformation",
+   "strokeColor": null,
+   "strokeWidth": 0.0,
+   "text": "info@fithome.example",
+   "type": "text",
+   "width": 310,
+   "wrap": "nowrap",
+   "x": 159,
+   "y": 916,
+   "zIndex": 20
+  }
+ ]
+}

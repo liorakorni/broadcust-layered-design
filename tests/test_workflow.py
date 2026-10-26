@@ -132,13 +132,44 @@ def test_every_task_catches_failures_to_record_them():
             assert state.get("Catch"), f"{name} has no Catch"
 
 
-def test_correct_is_a_terminal_diagnostic_not_another_full_pass():
-    """A review that cannot be routed to a bounded repair ends the job with a
-    specific error. It no longer loops back through ExtractScene, which paid for
-    every image again whatever the finding was."""
+def test_correct_is_a_terminal_delivery_not_another_full_pass():
+    """A review that cannot be routed to a bounded repair ends the loop by
+    delivering the best usable candidate. It no longer loops back through
+    ExtractScene, which paid for every image again whatever the finding was, and it
+    no longer ends in Failed over a quality finding. When nothing is usable it
+    raises, and that Catch is what records the failure."""
     assert "NextAttempt" not in STATES
-    assert STATES["Correct"]["Next"] == "Failed"
+    assert STATES["Correct"]["Next"] == "Succeeded"
     assert STATES["Correct"]["Catch"][0]["Next"] == "RecordFailure"
+
+
+def test_a_recorded_failure_ends_succeeded_when_a_candidate_was_delivered():
+    """RecordFailure salvages an earlier usable candidate. Its result always
+    answers `salvaged`, because a Choice on an absent path fails the execution
+    uncatchably and would leave the job RUNNING."""
+    assert STATES["RecordFailure"]["Next"] == "FailureOutcome"
+    choice = STATES["FailureOutcome"]
+    assert choice["Type"] == "Choice"
+    assert choice["Choices"] == [{
+        "Variable": "$.recorded.artifacts.salvaged", "BooleanEquals": True,
+        "Next": "Succeeded"}]
+    assert choice["Default"] == "Failed"
+
+
+def test_record_failure_answers_the_choice_that_reads_it(monkeypatch):
+    from lib import jobs
+
+    table = FakeTable()
+    monkeypatch.setattr(jobs, "_tbl", lambda: table)
+    table.items["JOB#j1"] = {"pk": "JOB#j1", "status": "RUNNING"}
+
+    out = handler_stage.handler({
+        "jobId": "j1", "stage": "FINALIZE", "attempt": 1, "recordFailure": True,
+        "failure": {"Error": "RenderFailed", "Cause": json.dumps({"errorMessage": "x"})},
+    }, None)
+
+    assert out["artifacts"]["salvaged"] is False        # nothing usable: a real failure
+    assert table.items["JOB#j1"]["status"] == "FAILED"
 
 
 def _reachable(start, *, stop=()):
