@@ -48,6 +48,9 @@ MIN_BAND = 0.2
 #: Cells whose overlay alpha exceeds this belong to artwork, not photograph.
 ARTWORK_ALPHA = 0.15
 
+#: An edge this much weaker than the strongest still counts as "as dark".
+EDGE_TIE = 0.08
+
 EDGES = ("left", "right", "top", "bottom")
 #: CSS angle with the gradient's first stop on the named edge.
 ANGLE = {"left": 90, "right": 270, "top": 180, "bottom": 0}
@@ -261,6 +264,15 @@ def fit(concept_bytes, photo_bytes, scene, overlay_bytes=None):
         ordered = profile if edge in ("left", "top") else profile[::-1]
         candidates.append((max(ordered[:3]), edge, ordered))
     strength, edge, ordered = max(candidates, key=lambda item: item[0])
+    # Several edges can be nearly as dark as the darkest (a black field behind the copy
+    # also darkens the top row). The gradient belongs on the side the copy is set
+    # against: a tall column of copy sits against the left or right edge, a wide band of
+    # copy against the top or bottom. (Measured live: a Hebrew column on the right got a
+    # top-down gradient, which the reviewer called misdirected.)
+    preferred = _edge_the_copy_is_against(region, canvas)
+    for candidate in candidates:
+        if candidate[1] == preferred and candidate[0] >= max(MIN_EDGE_ALPHA, strength - EDGE_TIE):
+            strength, edge, ordered = candidate
 
     text_mean = _text_mean(needed, rows, cols)
     measured = {
@@ -300,6 +312,14 @@ def fit(concept_bytes, photo_bytes, scene, overlay_bytes=None):
         ],
         "measured": measured,
     }
+
+
+def _edge_the_copy_is_against(region, canvas):
+    centre_x = region["x"] + region["width"] / 2.0
+    centre_y = region["y"] + region["height"] / 2.0
+    if region["height"] >= region["width"]:
+        return "left" if centre_x < canvas["width"] / 2.0 else "right"
+    return "top" if centre_y < canvas["height"] / 2.0 else "bottom"
 
 
 def _excluded_cells(scene, canvas, grid):

@@ -321,3 +321,26 @@ def test_copy_pixels_in_the_concept_are_not_read_as_a_brighter_background():
 def test_a_photograph_that_already_carries_the_shading_still_gets_none():
     same = png(textured(5, 40))
     assert readability.fit(same, same, scene_with_text(0, 600))["action"] == "none"
+
+
+def test_a_column_of_copy_on_the_right_gets_its_gradient_from_the_right_not_the_top():
+    """Measured live: the concept's black field also darkened its top rows as much as its
+    right ones, the strongest edge won the tie, and the design got a top-down gradient
+    behind a right-hand column - which the reviewer called misdirected."""
+    def concept_level(x, y):
+        return 0 if (x > SIZE * 0.45 or y < SIZE * 0.25) else 150
+
+    scene = scene_with_text(560, 380)          # a tall column on the right
+    fit = readability.fit(png(concept_level), flat(150), scene)
+
+    assert fit["action"] == "add" and fit["edge"] == "right" and fit["angle"] == 270
+
+
+def test_the_strongest_edge_still_wins_when_the_preferred_one_is_clearly_weaker():
+    def concept_level(x, y):
+        return 0 if y < SIZE * 0.4 else 150    # only the top is dark
+
+    scene = scene_with_text(560, 380)
+    fit = readability.fit(png(concept_level), flat(150), scene)
+
+    assert fit["action"] == "none" or fit["edge"] == "top"
