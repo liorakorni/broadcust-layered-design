@@ -116,7 +116,15 @@ def detect_groups(concept_bytes, scene):
     """
     canvas = scene["canvas"]
     tol = tolerance(canvas)
-    layers = {layer["id"]: layer for layer in scene.get("textLayers") or []}
+    # Copy set inside a button or badge is placed relative to that shape - centred in
+    # it, or inset from its end - not against the column's edge. Moving it to the
+    # column's anchor would push it off the shape's centre.
+    backing = [s for s in scene.get("shapeLayers") or []
+               if s.get("kind") in ("panel", "circle") and s.get("color")]
+    layers = {
+        layer["id"]: layer for layer in scene.get("textLayers") or []
+        if not any(_centre_inside(layer, shape) for shape in backing)
+    }
     with Image.open(io.BytesIO(concept_bytes)) as opened:
         image = opened.convert("RGB")
         ink = {
@@ -161,6 +169,13 @@ def detect_groups(concept_bytes, scene):
         groups.append(_group(edge, len(groups) + 1,
                              [(value, layers[i], ink[i]) for value, i in free]))
     return groups
+
+
+def _centre_inside(layer, shape):
+    cx = layer["x"] + layer["width"] / 2.0
+    cy = layer["y"] + layer["height"] / 2.0
+    return (shape["x"] <= cx <= shape["x"] + shape["width"]
+            and shape["y"] <= cy <= shape["y"] + shape["height"])
 
 
 def _group(edge, number, cluster):

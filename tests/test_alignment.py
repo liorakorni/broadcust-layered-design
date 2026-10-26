@@ -454,3 +454,34 @@ def test_a_drift_measured_by_the_browser_is_reported_without_blocking_approval(s
     assert "ALIGNMENT_DRIFT" in {w["code"] for w in review["warnings"]}
     assert "ALIGNMENT_DRIFT" not in {i["code"] for i in review["blockingIssues"]}
     assert review["approved"] is True
+
+
+def test_copy_inside_a_button_is_not_pulled_to_the_column_edge():
+    """Measured live: a call-to-action centred in its pill was clustered with the
+    paragraphs above it (its ink edge was 8px from theirs) and then moved 8px off the
+    pill's centre."""
+    from lib import alignment
+
+    scene = {
+        "canvas": {"width": 1000, "height": 1000},
+        "shapeLayers": [{"id": "pill", "kind": "panel", "color": "#FFD526", "x": 600, "y": 700,
+                         "width": 300, "height": 70}],
+        "textLayers": [
+            {"id": "a", "x": 480, "y": 100, "width": 420, "height": 40, "align": "right"},
+            {"id": "b", "x": 580, "y": 200, "width": 320, "height": 40, "align": "right"},
+            {"id": "cta", "x": 620, "y": 715, "width": 270, "height": 40, "align": "center"},
+        ],
+    }
+    from PIL import Image, ImageDraw
+    import io
+
+    image = Image.new("RGB", (1000, 1000), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    for box in ((480, 110, 880, 130), (580, 210, 880, 230), (640, 725, 885, 745)):
+        draw.rectangle(box, fill=(255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+
+    groups = alignment.detect_groups(buffer.getvalue(), scene)
+
+    assert [g["layerIds"] for g in groups] == [["a", "b"]]
