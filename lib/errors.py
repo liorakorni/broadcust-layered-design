@@ -38,6 +38,10 @@ class Stage:
     # DECORATION_OVERLAY for a job started with designFlow "layout-first".
     PLAN_LAYOUT = "PLAN_LAYOUT"
     GENERATE_PHOTO = "GENERATE_PHOTO"
+    # Reconstruction from an already approved concept (a request carrying
+    # `reuseConceptFromJobId`). Replaces CONCEPT and REVIEW_CONCEPT: nothing is
+    # generated and nothing is re-judged, which is the point.
+    REUSE_CONCEPT = "REUSE_CONCEPT"
     # Artifact namespaces rather than workflow stages: immutable design snapshots
     # and the record of each repair. They appear in artifact keys only.
     DESIGN_STATE = "DESIGN_STATE"
@@ -51,6 +55,7 @@ class Stage:
         ANALYZE_REFERENCE,
         PLAN_LAYOUT,
         GENERATE_PHOTO,
+        REUSE_CONCEPT,
         CONCEPT,
         REVIEW_CONCEPT,
         EXTRACT_SCENE,

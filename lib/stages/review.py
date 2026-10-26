@@ -306,7 +306,11 @@ def _route(job, scene, copy_items, produced, issues, verdict, approved, attempt,
         "fonts": conf.APPROVED_FONT_FAMILIES,
         # A layout-first design has no concept to regenerate, so the review cannot
         # justify that route however it answers.
-        "conceptJustified": bool(verdict.conceptDefect) and job.get("flow") != "layout-first",
+        # A job rebuilt from an earlier job's approved concept never replaces it:
+        # the point of reusing it is that the composition cannot change.
+        "conceptJustified": bool(verdict.conceptDefect)
+        and job.get("flow") != "layout-first"
+        and not job.get("reuseConceptFrom"),
     }
     counts = jobs.repair_counts(job)
     counts["concept"] = int(job.get("conceptRounds", 0) or 0)

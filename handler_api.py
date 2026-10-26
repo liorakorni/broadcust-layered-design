@@ -115,6 +115,11 @@ def run_layered_design(payload, caller_context):
     request = parse_start_request(payload)
     request_hash = canonical_request_hash(request)
 
+    if request.reuseConceptFromJobId:
+        # Refused before anything is claimed or created, so a request that cannot
+        # work leaves no job behind.
+        _check_reusable_concept(request.reuseConceptFromJobId, owner_scope)
+
     job_id, created = jobs.claim_idempotency(
         owner_scope, request.requestId, request_hash
     )
@@ -149,9 +154,10 @@ def run_layered_design(payload, caller_context):
             # Resolved once, here: every later stage reads this document.
             layout_policy=direction_policy.resolve_for_request(
                 request.model_dump(mode="json")),
+            reuse_concept_from=request.reuseConceptFromJobId,
         )
 
-    _ensure_execution(job_id, request.designFlow)
+    _ensure_execution(job_id, request.designFlow, reuse=bool(request.reuseConceptFromJobId))
 
     log.info(json.dumps({"jobId": job_id, "created": created, "op": "run"}))
     return {
@@ -203,7 +209,21 @@ def export_layered_design(payload, caller_context):
     return {"success": True, **body["artifacts"]}
 
 
-def _ensure_execution(job_id, flow="legacy"):
+def _check_reusable_concept(source_job_id, owner_scope):
+    """The earlier job must be the caller's own and must have an approved concept."""
+    try:
+        source = jobs.get_job(source_job_id, owner_scope)    # existence + ownership
+    except LayeredDesignError:
+        raise InvalidRequest(
+            "reuseConceptFromJobId does not name one of your jobs."
+        ) from None
+    if not (source.get("approvedConcept") or {}).get("key"):
+        raise InvalidRequest(
+            "That job never approved a concept, so there is nothing to reuse."
+        )
+
+
+def _ensure_execution(job_id, flow="legacy", reuse=False):
     """Start the workflow, or reconcile an execution that already exists.
 
     The execution name is derived from the job ID, so a crash between job
@@ -218,7 +238,10 @@ def _ensure_execution(job_id, flow="legacy"):
             name=name,
             # `attempt` is seeded here so every downstream state can reference
             # $.attempt without a separate initialising Pass state.
-            input=json.dumps({"jobId": job_id, "attempt": 1, "flow": flow}),
+            input=json.dumps({
+                "jobId": job_id, "attempt": 1, "flow": flow,
+                **({"reuseConcept": True} if reuse else {}),
+            }),
         )
         arn = response["executionArn"]
     except ClientError as exc:

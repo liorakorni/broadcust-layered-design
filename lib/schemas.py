@@ -206,6 +206,19 @@ class StartRequest(Strict):
     # the locale of the copy. Adapting is the default: a Hebrew brief gets a
     # Hebrew composition even when the reference is an English one.
     referenceLayoutPolicy: Literal["adapt-to-locale", "preserve"] = "adapt-to-locale"
+    # Rebuild the editable design from the approved concept of an earlier job of
+    # the same owner instead of generating a new one. For re-running reconstruction
+    # after a pipeline fix: the concept the customer approved is not replaced, so
+    # nothing about the composition can change. The brief should be the earlier
+    # job's, so the copy matches the concept.
+    reuseConceptFromJobId: Optional[str] = None
+
+    @field_validator("reuseConceptFromJobId")
+    @classmethod
+    def _reuse_source(cls, v):
+        if v is not None and not re.fullmatch(r"[0-9a-f]{32}", v):
+            raise ValueError("reuseConceptFromJobId must be a 32-character job id")
+        return v
 
     @field_validator("designFlow", mode="before")
     @classmethod
@@ -220,6 +233,8 @@ class StartRequest(Strict):
     def _flow_assets(self):
         if self.designFlow == "layout-first" and self.suppliedAssets:
             raise ValueError("designFlow 'layout-first' does not support suppliedAssets yet")
+        if self.designFlow == "layout-first" and self.reuseConceptFromJobId:
+            raise ValueError("a layout-first design has no concept to reuse")
         return self
 
     @field_validator("reviewStrictness", mode="before")

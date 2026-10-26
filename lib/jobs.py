@@ -146,7 +146,7 @@ def job_exists(job_id):
 
 def create_job(job_id, owner_scope, request_hash, request_key, canvas,
                design_freedom=0, review_strictness=None, flow="legacy",
-               layout_policy=None):
+               layout_policy=None, reuse_concept_from=None):
     """Record the job as QUEUED before any execution starts.
 
     `layout_policy` is the direction policy resolved once at acceptance
@@ -207,6 +207,7 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
             **{f"repairs_{category}": 0 for category in REPAIR_CATEGORIES},
             "flow": flow,
             **({"layoutPolicy": layout_policy} if layout_policy else {}),
+            **({"reuseConceptFrom": {"jobId": reuse_concept_from}} if reuse_concept_from else {}),
             "createdAt": _now(),
             "updatedAt": _now(),
             "expiresAt": _ttl(),

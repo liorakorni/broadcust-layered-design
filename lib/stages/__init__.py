@@ -23,6 +23,7 @@ def build_registry():
         prepare_copy,
         review,
         review_concept,
+        reuse_concept,
         separation,
         validate,
     )
@@ -33,6 +34,7 @@ def build_registry():
         Stage.ANALYZE_REFERENCE: analyze_reference.run,
         Stage.CONCEPT: concept.run,
         Stage.REVIEW_CONCEPT: review_concept.run,
+        Stage.REUSE_CONCEPT: reuse_concept.run,
         Stage.PLAN_LAYOUT: plan_layout.run,
         Stage.GENERATE_PHOTO: plan_layout.generate_photo,
         Stage.EXTRACT_SCENE: extract_scene.run,

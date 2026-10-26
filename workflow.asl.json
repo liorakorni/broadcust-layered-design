@@ -771,7 +771,7 @@
     },
     "FlowChoice": {
       "Type": "Choice",
-      "Comment": "The layout-first flow (feature flag; Phase B) plans an editable layout and generates only the text-free photograph. It never enters CONCEPT, EXTRACT_SCENE, DECORATION_OVERLAY or CLEAN_PHOTO. Executions without a flow field are the legacy flow.",
+      "Comment": "The layout-first flow (feature flag; Phase B) plans an editable layout and generates only the text-free photograph. It never enters CONCEPT, EXTRACT_SCENE, DECORATION_OVERLAY or CLEAN_PHOTO. Executions without a flow field are the legacy flow. A job started with reuseConceptFromJobId copies the approved concept of an earlier job (ReuseConcept) instead of generating one.",
       "Choices": [
         {
           "And": [
@@ -785,6 +785,19 @@
             }
           ],
           "Next": "PlanLayout"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.reuseConcept",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.reuseConcept",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "ReuseConcept"
         }
       ],
       "Default": "Concept"
@@ -867,6 +880,28 @@
         }
       ],
       "Default": "Failed"
+    },
+    "ReuseConcept": {
+      "Type": "Task",
+      "Resource": "${StageFunctionArn}",
+      "Comment": "Copies and freezes an earlier job's approved concept. No image call; nothing is re-judged.",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "stage": "REUSE_CONCEPT",
+        "attempt": 1,
+        "assetId": null
+      },
+      "ResultPath": "$.concept",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ExtractScene"
     }
   }
 }

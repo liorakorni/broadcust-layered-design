@@ -533,3 +533,20 @@ def test_the_repair_carries_the_current_attempt():
 
 def test_a_failed_repair_ends_the_job():
     assert STATES["RepairOverlay"]["Catch"][0]["Next"] == "RecordFailure"
+
+
+def test_a_reuse_request_skips_concept_generation_and_review():
+    """`reuseConcept` is only ever set by the API for a request that names an earlier
+    job's concept; the choice is guarded because Choice on an absent path fails
+    uncatchably, and every other execution has no such field."""
+    choice = [c for c in STATES["FlowChoice"]["Choices"] if c["Next"] == "ReuseConcept"]
+    assert len(choice) == 1
+    tests = choice[0]["And"]
+    assert tests[0] == {"Variable": "$.reuseConcept", "IsPresent": True}
+    assert tests[1] == {"Variable": "$.reuseConcept", "BooleanEquals": True}
+    reuse = STATES["ReuseConcept"]
+    assert reuse["Parameters"]["stage"] == "REUSE_CONCEPT"
+    assert reuse["Next"] == "ExtractScene"
+    assert reuse["Catch"][0]["Next"] == "RecordFailure"
+    # Nothing in it can pay for an image: no retry list for provider errors.
+    assert "Retry" not in reuse

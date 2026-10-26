@@ -1,6 +1,7 @@
 """Job-plane tests: acceptance, idempotency, ownership, status and reconciliation."""
 
 import copy
+import json
 
 import pytest
 
@@ -314,3 +315,56 @@ def test_nested_write_without_its_parent_map_is_rejected(wired):
     jobs.set_stage("stub", "PREFLIGHT")
     with pytest.raises(ClientError, match="document path"):
         jobs.record_artifacts("stub", "PREFLIGHT", 1, {"photo": "k"})
+
+
+# --- reuse of an earlier job's concept ---
+
+def test_the_request_names_a_job_of_the_same_owner_and_starts_the_reuse_path(
+        start_payload, wired):
+    owner = jobs.resolve_owner_scope(CALLER)
+    first = start(start_payload)["jobId"]
+    wired["table"].items[f"JOB#{first}"]["approvedConcept"] = {"key": "k", "sha256": "s"}
+    again = copy.deepcopy(start_payload)
+    again["requestId"] = "second-run"
+    again["reuseConceptFromJobId"] = first
+    res = start(again)
+    assert res["success"] is True
+    job = wired["table"].items[f"JOB#{res['jobId']}"]
+    assert job["reuseConceptFrom"] == {"jobId": first}
+    assert job["ownerScope"] == owner
+    execution = json.loads(wired["sfn"].started[-1]["input"])
+    assert execution["reuseConcept"] is True
+    assert "reuseConcept" not in json.loads(wired["sfn"].started[0]["input"])
+
+
+@pytest.mark.parametrize("source", ["not-an-id", "0" * 32])
+def test_an_unknown_or_malformed_source_is_refused_before_anything_is_created(
+        start_payload, wired, source):
+    payload = copy.deepcopy(start_payload)
+    payload["reuseConceptFromJobId"] = source
+    res = start(payload)
+    assert res["success"] is False
+    assert res["error"]["code"] == "INVALID_REQUEST"
+    assert wired["sfn"].started == []
+    assert not [k for k in wired["table"].items if k.startswith("JOB#")]
+
+
+def test_another_owners_job_is_indistinguishable_from_a_missing_one(start_payload, wired):
+    first = start(start_payload, OTHER_CALLER)["jobId"]
+    wired["table"].items[f"JOB#{first}"]["approvedConcept"] = {"key": "k", "sha256": "s"}
+    mine = copy.deepcopy(start_payload)
+    mine["requestId"] = "mine"
+    mine["reuseConceptFromJobId"] = first
+    res = start(mine)
+    assert res["success"] is False
+    assert len([k for k in wired["table"].items if k.startswith("JOB#")]) == 1
+
+
+def test_a_job_without_an_approved_concept_has_nothing_to_reuse(start_payload, wired):
+    first = start(start_payload)["jobId"]
+    again = copy.deepcopy(start_payload)
+    again["requestId"] = "second"
+    again["reuseConceptFromJobId"] = first
+    res = start(again)
+    assert res["success"] is False
+    assert "nothing to reuse" in res["error"]["message"]
