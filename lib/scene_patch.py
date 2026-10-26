@@ -229,6 +229,9 @@ def apply_properties(scene, layer_id, properties, *, target, font_names=()):
     allowed = allowed_properties(target, kind)
     patched = copy.deepcopy(scene)
     _, layer = layer_kind(patched, layer_id)
+    if kind == "text":
+        _guard_outline(layer, properties)
+    before = dict(layer)
     for name, raw in properties.items():
         spec = allowed.get(name)
         if spec is None:
@@ -250,7 +253,35 @@ def apply_properties(scene, layer_id, properties, *, target, font_names=()):
             # exactly what makes widths free to differ.
             if kind == "text" and name in ("x", "align"):
                 alignment.release(patched, layer_id)
+    if kind == "text" and "overflow" not in properties and \
+            any(layer.get(name) != before.get(name) for name in SIZING_PROPERTIES):
+        # A repair that sets the size, tracking, weight or line height of a line has decided
+        # what it should look like. The renderer's automatic fitting would shrink
+        # it back to whatever fits its box and the repair would change nothing;
+        # keeping the size makes an overflow visible instead, where it is measured
+        # and answered by widening the box.
+        layer["overflow"] = "visible"
     return patched
+
+
+#: Typography properties whose value is a size the renderer's fitting could undo.
+SIZING_PROPERTIES = ("fontSize", "letterSpacing", "fontWeight", "lineHeight")
+
+
+def _guard_outline(layer, properties):
+    """An outlined headline is never turned into solid text by a repair.
+
+    Solid lettering is the easy way to make an outline "readable", and it changes
+    the lettering the customer approved. If an outline cannot be made to work within
+    the bounded repair, the design is delivered with that stated as a quality issue,
+    not quietly altered.
+    """
+    if layer.get("fill") == "transparent" and properties.get("fill") == "solid":
+        raise InvalidScene(
+            f"{layer['id']!r} is outlined lettering; a repair may not replace it with "
+            "solid text. Adjust its stroke, size or tracking, or report it as a quality "
+            "issue."
+        )
 
 
 def _set_gradient_strength(layer, strength):

@@ -69,6 +69,10 @@ def summary(job):
         "stages": stages,
         "imageGenerationCalls": int(m.get("imageCalls", 0)),
         "imageGenerationCallsByStage": by_stage,
+        # Browser renders, counted apart from the paid image calls above: a repair
+        # that renders again and a repair that generates are very different costs.
+        "renderCalls": int(m.get("stageRuns:RENDER", 0)),
+        "fittedGradients": int(m.get("fittedGradients", 0)),
         "cache": {
             "validationHits": int(m.get("validationCacheHits", 0)),
             "validationMisses": int(m.get("validationCacheMisses", 0)),
