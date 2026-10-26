@@ -126,6 +126,9 @@ OVERLAY SAMPLES:
   graphic panel sits there - a border, a frame or a colour field that stays in
   the decoration layer. Never sample a shape you listed in shapeLayers: the
   layout draws those, so the overlay is empty there.
+- A region that is flat black in the concept is not evidence of photograph - a
+  black panel looks the same - so never report one as transparent; choose
+  photographic areas with visible detail.
 - These are used to verify the separation, so choose clearly representative
   areas well inside each region rather than on a boundary.
 

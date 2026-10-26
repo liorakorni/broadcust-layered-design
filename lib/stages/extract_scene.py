@@ -304,6 +304,11 @@ def run(job_id, attempt, asset_id=None):
             job_id, len(corrections), len(ignored),
         )
 
+    # A sample on flat black cannot show that the photograph is there: see
+    # concept_sample.drop_uninformative_samples.
+    document["overlaySamples"], dropped_samples = concept_sample.drop_uninformative_samples(
+        concept_bytes, document)
+
     # Relationships the concept shows, which a model reading each box on its own
     # does not carry: text that shares an edge, shapes that share a fill. Both are
     # measured from pixels and recorded; ASSEMBLE turns them into positions.
@@ -329,13 +334,14 @@ def run(job_id, attempt, asset_id=None):
         "alignmentGroups": len(document.get("alignmentGroups") or []),
         "fillGroups": len(document.get("fillGroups") or []),
     }
-    if corrections or ignored:
+    if corrections or ignored or dropped_samples:
         # Kept beside the scene rather than inside it: the scene is the design,
         # and this is the evidence of how it was adjusted.
         colors_key = artifacts.artifact_key(
             job_id, Stage.EXTRACT_SCENE, attempt, "scene-colors.json")
         recorded["colorCorrections"] = artifacts.put_json(
-            colors_key, {"corrections": corrections, "ignored": ignored})["key"]
+            colors_key, {"corrections": corrections, "ignored": ignored,
+                          "droppedSamples": dropped_samples})["key"]
     jobs.record_artifacts(job_id, Stage.EXTRACT_SCENE, attempt, recorded)
     return {
         "scene": stored["key"],

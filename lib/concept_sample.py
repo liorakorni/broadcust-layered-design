@@ -289,3 +289,54 @@ def _rgb(value):
     if len(digits) != 6:
         raise ValueError(f"not a hex colour: {value!r}")
     return tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
+
+
+# --- overlay samples --------------------------------------------------------
+
+# A "transparent" sample says the photograph shows through there, so the overlay
+# must be empty. In a concept, a region that is flat black proves nothing of the
+# kind: a solid black panel and a photograph darkened to black look the same, and
+# the "opaque" samples beside it are the same black. (Measured: samples reported
+# transparent on regions of mean luminance 1-4, which the overlay - correctly,
+# the black being a graphic panel - then filled, and two repairs could not make
+# it do otherwise.) Photographic content is the only evidence.
+FLAT_BLACK_MEAN = 12
+FLAT_BLACK_PEAK = 40
+
+
+def drop_uninformative_samples(image_bytes, scene):
+    """Remove transparent samples that sit on flat black. Returns `(kept, dropped)`.
+
+    Never empties the list of transparent samples entirely when there were some
+    and none is informative: validation with no samples at all is a refusal, and a
+    design that is dark throughout has nothing better to offer.
+    """
+    samples = scene.get("overlaySamples") or []
+    canvas = scene["canvas"]
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        gray = source.convert("L").resize((canvas["width"], canvas["height"]))
+    kept, dropped = [], []
+    for sample in samples:
+        if sample.get("kind") != "transparent":
+            kept.append(sample)
+            continue
+        box = (
+            max(0, int(sample["x"])), max(0, int(sample["y"])),
+            min(canvas["width"], int(sample["x"] + sample["width"])),
+            min(canvas["height"], int(sample["y"] + sample["height"])),
+        )
+        if box[2] <= box[0] or box[3] <= box[1]:
+            kept.append(sample)
+            continue
+        region = gray.crop(box)
+        histogram = region.histogram()
+        total = sum(histogram) or 1
+        mean = sum(i * n for i, n in enumerate(histogram)) / total
+        peak = region.getextrema()[1]
+        if mean < FLAT_BLACK_MEAN and peak < FLAT_BLACK_PEAK:
+            dropped.append({**sample, "mean": round(mean, 1), "peak": peak})
+        else:
+            kept.append(sample)
+    if dropped and not any(s.get("kind") == "transparent" for s in kept):
+        return samples, []
+    return kept, dropped
