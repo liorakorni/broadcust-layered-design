@@ -48,15 +48,23 @@ def assemble(job_id, attempt, asset_id=None):
     # for. The original stays readable at its own key.
     scene_key = artifacts.artifact_key(job_id, Stage.ASSEMBLE, attempt, "scene.json")
     stored_scene = artifacts.put_json(scene_key, scene)
+    effective = _effective_typography(scene, requested)
+    # The job record keeps only the latest attempt's pointers, so this attempt's
+    # asked-for and set sizes are also kept as their own artifact: a size that fitting
+    # reduced in attempt 1 must stay visible after attempt 2 has assembled.
+    typography_key = artifacts.artifact_key(job_id, Stage.ASSEMBLE, attempt, "typography.json")
+    artifacts.put_json(typography_key, {"typography": effective, "fitted": fitted,
+                                        "aligned": aligned})
     record = {
         "html": stored["key"],
         "htmlHash": stored["sha256"],
         "scene": stored_scene["key"],
+        "typographyKey": typography_key,
         "fitted": fitted,
         "aligned": aligned,
         # What each layer will actually render with, after fitting: the size that
         # was asked for beside the size that was set, so a shrink is never silent.
-        "typography": _effective_typography(scene, requested),
+        "typography": effective,
         # FINALIZE hashes this manifest, so it is persisted rather than only
         # returned through workflow state, which carries pointers alone.
         "assets": published["manifest"],

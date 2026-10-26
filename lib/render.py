@@ -354,10 +354,31 @@ def _inspect(page, canvas):
                     right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom);
                 }
                 if (left === Infinity) continue;
+                // The line rectangles are the font's content area - ascent plus
+                // descent - which for a Hebrew face at line-height 1 is taller than
+                // the glyphs and than the box the layout allotted. Overlap judged on
+                // that reports lines that merely touch as colliding, so trim each
+                // side to the ink the text really has.
+                const content = {left, top, right, bottom};
+                const inkStyle = getComputedStyle(inner);
+                const ctx = document.createElement('canvas').getContext('2d');
+                ctx.font = `${inkStyle.fontStyle} ${inkStyle.fontWeight} ` +
+                    `${inkStyle.fontSize} ${inkStyle.fontFamily}`;
+                const m = ctx.measureText(inner.textContent);
+                if (m.fontBoundingBoxAscent !== undefined) {
+                    const trimTop = Math.max(0,
+                        m.fontBoundingBoxAscent - m.actualBoundingBoxAscent);
+                    const trimBottom = Math.max(0,
+                        m.fontBoundingBoxDescent - m.actualBoundingBoxDescent);
+                    if (bottom - top - trimTop - trimBottom > 1) {
+                        top += trimTop; bottom -= trimBottom;
+                    }
+                }
                 const b = el.getBoundingClientRect();
                 const style = getComputedStyle(el);
                 rects[el.id] = {
                     ink: {left, top, right, bottom},
+                    content,
                     box: {left: b.left, top: b.top, right: b.right, bottom: b.bottom},
                     // What the browser actually resolved, so a fallback face or a
                     // size the fitting changed is visible rather than assumed.

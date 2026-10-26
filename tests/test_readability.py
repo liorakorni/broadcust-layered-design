@@ -281,3 +281,43 @@ def test_a_fit_that_crashes_never_fails_the_job(script, monkeypatch):
     validation = artifacts.get_json(
         script["jobId"], job["artifacts"][Stage.VALIDATE_ASSETS]["validation"])
     assert validation["readability"]["action"] == "failed"
+
+
+# --- a dark photograph (measured live) ----------------------------------------------------
+
+
+def textured(level_of_shadow, highlight):
+    """A photograph with deep shadows and bright detail, in a fine checker."""
+    return lambda x, y: highlight if (x // 2 + y // 2) % 2 else level_of_shadow
+
+
+def test_a_dark_photograph_with_bright_detail_still_needs_the_concept_s_black_field():
+    """Measured on a rebuilt design: the concept's field behind the copy was black, the
+    cleaned photograph's shadows were nearly as dark, and a low-percentile comparison read
+    that as 'almost no shading' - a 0.4 fade where 0.9 was needed, and a reviewer who could
+    still see the gym through the copy. Means over the pixels that are not copy see the
+    highlights the concept removed."""
+    photograph = png(textured(8, 70))
+    concept = png(lambda x, y: 0)
+    scene = scene_with_text(0, 600)
+
+    fit = readability.fit(concept, photograph, scene)
+
+    assert fit["action"] == "add"
+    assert fit["measured"]["edgeAlpha"] >= 0.85
+    assert fit["measured"]["textMeanAlpha"] >= 0.85
+
+
+def test_copy_pixels_in_the_concept_are_not_read_as_a_brighter_background():
+    """White text on the concept's black field: the text must not cancel the shading."""
+    def with_text(x, y):
+        return 255 if 20 <= x < 100 and (y // 8) % 2 == 0 else 0
+
+    fit = readability.fit(png(with_text), png(textured(10, 80)), scene_with_text(0, 600))
+
+    assert fit["action"] == "add" and fit["measured"]["edgeAlpha"] >= 0.85
+
+
+def test_a_photograph_that_already_carries_the_shading_still_gets_none():
+    same = png(textured(5, 40))
+    assert readability.fit(same, same, scene_with_text(0, 600))["action"] == "none"

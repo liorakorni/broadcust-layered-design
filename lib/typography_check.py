@@ -19,6 +19,7 @@ import io
 
 from PIL import Image
 
+import conf
 from lib import alignment
 
 #: An outline whose rendered ink fills more than this share of its own rectangle,
@@ -65,17 +66,27 @@ def _fonts(scene, platform_fonts, element_of):
         strays = [f for f in used
                   if f.get("glyphCount", 0) > 0
                   and (f.get("familyName") or "").strip().lower() != wanted]
-        if strays:
+        if not strays:
+            continue
+        drawn = ", ".join(sorted({f.get("familyName") or "an unknown face" for f in strays}))
+        measured = {"requested": layer["fontFamily"],
+                    "used": [{"family": f.get("familyName"), "glyphs": f.get("glyphCount")}
+                             for f in used]}
+        if wanted not in {f.lower() for f in conf.RENDER_FONT_FAMILIES}:
+            # A system face the renderer does not carry (Arial): it draws a
+            # stand-in here, and the customer's own editor has the real one. The
+            # design asks for what was approved, so nothing in it is wrong.
             out.append(_problem(
-                "FONT_FALLBACK", BLOCKING, element_of[layer["id"]],
-                f"{layer['id']} asked for {layer['fontFamily']} but "
-                f"{', '.join(sorted({f.get('familyName') or 'an unknown face' for f in strays}))} "
-                "drew some of it; widths, weight and the headline's footprint are not the "
-                "approved lettering.",
-                requested=layer["fontFamily"],
-                used=[{"family": f.get("familyName"), "glyphs": f.get("glyphCount")}
-                      for f in used],
-            ))
+                "FONT_STANDIN_IN_PREVIEW", WARNING, element_of[layer["id"]],
+                f"{layer['id']} asks for {layer['fontFamily']}, which the preview "
+                f"renderer does not have; {drawn} stood in for it in the preview only.",
+                **measured))
+            continue
+        out.append(_problem(
+            "FONT_FALLBACK", BLOCKING, element_of[layer["id"]],
+            f"{layer['id']} asked for {layer['fontFamily']} but {drawn} drew some of it; "
+            "widths, weight and the headline's footprint are not the approved lettering.",
+            **measured))
     return out
 
 

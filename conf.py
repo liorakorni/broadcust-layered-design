@@ -114,6 +114,10 @@ VISION_PROVIDER_TIMEOUT_SECONDS = 120
 
 # --- Rendering ---------------------------------------------------------------
 FEED_RENDER_WIDTH = 360
+# The families the render environment itself ships (assets/fonts, registered with
+# fontconfig in the image). Any other approved family is a system font the renderer
+# does not have: it draws a stand-in in the preview, which is not a defect of the design.
+RENDER_FONT_FAMILIES = ("Heebo",)
 APPROVED_FONT_FAMILIES = tuple(
     f.strip()
     for f in os.environ.get("APPROVED_FONT_FAMILIES", "Heebo,Arial").split(",")

@@ -93,6 +93,64 @@ def alpha_grid(overlay_bytes, *, grid=GRID):
     return [[pixels[c, r] / 255.0 for c in range(grid)] for r in range(grid)]
 
 
+#: Samples per cell side when pairing concept and photograph pixel by pixel.
+PAIR_OVERSAMPLE = 8
+#: A concept pixel this much brighter (dark copy: darker) than the photograph at the
+#: same place is the copy or its artwork, not the background, and is left out.
+COPY_MARGIN = 0.06
+#: Below this mean luminance the photograph has nothing to darken.
+MIN_PHOTO_LUMA = 0.03
+#: A cell with fewer background pixels than this share is mostly copy: unmeasured.
+MIN_BACKGROUND_SHARE = 0.25
+
+
+def paired_grids(concept_bytes, photo_bytes, light_text, *, grid=GRID):
+    """Per cell: the opacity of black (white, for dark copy) the concept added.
+
+    Compares the two images pixel by pixel, leaving out the pixels that are the copy
+    (the concept is brighter than the photograph there), and takes the cell's
+    *means*:  alpha = 1 - mean(concept) / mean(photo).  Returns `(needed, concept,
+    photo)` grids, `None` where a cell is mostly copy.
+
+    Means rather than a percentile of each image: a dark photograph has very dark
+    shadows whatever is done to it, so a low percentile of the photograph and of a
+    black concept are both near zero and their ratio says "no shading" - while the
+    highlights, which are what makes the background compete with the copy, are
+    exactly what the concept removed.
+    """
+    side = grid * PAIR_OVERSAMPLE
+    with Image.open(io.BytesIO(concept_bytes)) as a, Image.open(io.BytesIO(photo_bytes)) as b:
+        c_px = a.convert("L").resize((side, side), Image.BOX).load()
+        p_px = b.convert("L").resize((side, side), Image.BOX).load()
+    needed = [[None] * grid for _ in range(grid)]
+    c_mean = [[None] * grid for _ in range(grid)]
+    p_mean = [[None] * grid for _ in range(grid)]
+    total = PAIR_OVERSAMPLE * PAIR_OVERSAMPLE
+    for r in range(grid):
+        for c in range(grid):
+            kept_c = kept_p = 0.0
+            kept = 0
+            for j in range(PAIR_OVERSAMPLE):
+                for i in range(PAIR_OVERSAMPLE):
+                    cv = c_px[c * PAIR_OVERSAMPLE + i, r * PAIR_OVERSAMPLE + j] / 255.0
+                    pv = p_px[c * PAIR_OVERSAMPLE + i, r * PAIR_OVERSAMPLE + j] / 255.0
+                    if (cv > pv + COPY_MARGIN) if light_text else (cv < pv - COPY_MARGIN):
+                        continue
+                    kept_c += cv
+                    kept_p += pv
+                    kept += 1
+            if kept < total * MIN_BACKGROUND_SHARE:
+                continue
+            mc, mp = kept_c / kept, kept_p / kept
+            c_mean[r][c], p_mean[r][c] = mc, mp
+            if light_text:
+                value = 0.0 if mp < MIN_PHOTO_LUMA else 1.0 - mc / mp
+            else:
+                value = 0.0 if mp > 1.0 - MIN_PHOTO_LUMA else (mc - mp) / (1.0 - mp)
+            needed[r][c] = min(MAX_ALPHA, max(0.0, value))
+    return needed, c_mean, p_mean
+
+
 def _luma(hex_color):
     digits = hex_color.lstrip("#")
     if len(digits) == 3:
@@ -181,9 +239,7 @@ def fit(concept_bytes, photo_bytes, scene, overlay_bytes=None):
         return {"action": "none", "reason": "the scene has no text to make readable"}
 
     light_text = text_is_light(scene)
-    concept = luminance_grid(concept_bytes, percentile=0.3 if light_text else 0.7)
-    # The same percentile on both, or texture alone would read as shading.
-    photo = luminance_grid(photo_bytes, percentile=0.3 if light_text else 0.7)
+    unfiltered, concept, photo = paired_grids(concept_bytes, photo_bytes, light_text)
     artwork = alpha_grid(overlay_bytes)
     grid = len(concept)
 
@@ -193,12 +249,7 @@ def fit(concept_bytes, photo_bytes, scene, overlay_bytes=None):
         for c in range(grid):
             if excluded[r][c] or (artwork and artwork[r][c] > ARTWORK_ALPHA):
                 continue
-            lc, lp = concept[r][c], photo[r][c]
-            if light_text:
-                value = 0.0 if lp < 0.04 else 1.0 - lc / lp
-            else:
-                value = 0.0 if lp > 0.96 else (lc - lp) / (1.0 - lp)
-            needed[r][c] = min(MAX_ALPHA, max(0.0, value))
+            needed[r][c] = unfiltered[r][c]
 
     rows, cols = _span(region, canvas, grid)
     horizontal_profile = _profile(needed, rows, axis="columns")

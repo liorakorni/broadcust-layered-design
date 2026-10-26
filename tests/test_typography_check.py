@@ -122,6 +122,21 @@ def test_the_requested_face_alone_is_fine_and_an_unmeasured_font_is_not_a_findin
             if p["code"] == "FONT_FALLBACK"] == []
 
 
+def test_a_system_face_the_renderer_does_not_carry_is_a_preview_note_not_a_defect():
+    """Measured live: Arial copy drawn by Noto Sans in the Lambda's Chromium was reported
+    as a blocking FONT_FALLBACK on three layers, none of which any repair could fix."""
+    layer = headline(id="t_phone", fontFamily="Arial", fill="solid", strokeWidth=0.0,
+                     fontSize=30, direction="ltr", align="left")
+    scene = scene_of(layer)
+    element = assemble_html.element_ids(scene)["t_phone"]
+    fonts = {element: [{"familyName": "Noto Sans", "glyphCount": 11}]}
+
+    problems = check(scene, None, None, platform_fonts=fonts)
+
+    assert [p["code"] for p in problems] == ["FONT_STANDIN_IN_PREVIEW"]
+    assert problems[0]["severity"] == "warning" and "Noto Sans" in problems[0]["message"]
+
+
 # --- repairs may not hide the problem -----------------------------------------------------------
 
 
