@@ -55,7 +55,7 @@ Stable logical names used across stages:
 | `CONCEPT` | `concept.png` | Exact concept bytes — the immutable separation input |
 | `EXTRACT_SCENE` | `scene.json` | Validated scene document |
 | `CLEAN_PHOTO` | `photo.png`, `photo-after-repair-N.png` | Background photograph, no text or graphics; rebuilt after each overlay repair |
-| `DECORATION_OVERLAY` | `overlay.png`, `overlay-repair-N.png` | RGBA decoration layer; each repair is a fresh extraction from the concept |
+| `DECORATION_OVERLAY` | `overlay.png`, `overlay-repair-N.png`, `overlay-cleared-N.png` | RGBA decoration layer; each repair is a fresh extraction from the concept, and `cleared` is one whose duplicate component boxes were erased in code |
 | `INDEPENDENT_ASSETS` | `assets/<assetId>.png` | One independent asset |
 | `VALIDATE_ASSETS` | `validation.json` | Per-asset measurements and verdicts |
 | `ASSEMBLE` | `design.html` | Exact final HTML bytes |
@@ -116,8 +116,52 @@ REVIEW_CONCEPT -> [CorrectConcept -> CONCEPT]* | SelectConcept -> EXTRACT_SCENE 
 
 - `designFreedom` is an integer 0..100, default 0. `reviewStrictness` is a string,
   default `"balanced"` (the only supported level). The job stores both and
-  `policyVersion` (`"2.0"`). `designFreedom` is part of the canonical request hash;
-  `reviewStrictness` is excluded from it while it equals the default.
+  `policyVersion` (`"3.0"`). `designFreedom` is part of the canonical request hash;
+  `reviewStrictness`, `layoutDirection`, `textDirection` and
+  `referenceLayoutPolicy` are excluded from it while they equal their defaults, so
+  a request accepted before those fields existed hashes as it did.
+- **Direction is resolved before generation, never patched after.**
+  ANALYZE_REFERENCE resolves `{layoutDirection, textDirection, source, reason}` from
+  the request, then explicit placement in the brief or
+  `referenceLayoutPolicy: "preserve"` (which resolves `layoutDirection` to
+  `preserve-reference`), then the locale of the approved copy; it is carried in
+  `policy.json` under `direction` and rendered into the ANALYZE_REFERENCE, CONCEPT,
+  concept-correction and REVIEW_CONCEPT prompts. Only column positions mirror:
+  photographs, logos and pictograms never do, and Latin runs inside a right-to-left
+  line (business names, phone numbers, emails, URLs) keep their character order.
+  REVIEW_CONCEPT answers `compositionDirectionOk`, which becomes the required
+  `compositionDirection` check; a failure is a blocking
+  `COMPOSITION_DIRECTION_WRONG` issue so the bounded concept correction fixes it.
+  Decomposition never changes direction.
+- **Independent assets are recorded one key at a time.** INDEPENDENT_ASSETS runs as
+  a Map, so each branch writes its own entry under the job's `assets` map
+  (`jobs.record_asset_item`, read back with `jobs.asset_items`) rather than relying
+  on the Map's collected output: ASSEMBLE reads the job, and an asset that never
+  reaches it is an asset with no delivered URL. Floats are converted to `Decimal`
+  on the way in (`jobs.storable`); DynamoDB rejects a float and fails the whole
+  write.
+- **A component the artwork would not give up.** After the bounded overlay repair,
+  a duplicate still in the overlay is erased arithmetically inside its own box
+  (`overlay-cleared-N.png`, metric `overlayAreasClearedInCode`) - safe because
+  CLEAN_PHOTO repaints under that box and the layout draws the shape over it.
+  Gradients are too large for that, so instead the shape is given back to the
+  asset that kept it (`scene_patch.rasterize_shapes`): its effect's owner becomes
+  that asset, its component entry moves onto the asset's own entry, any overlay
+  sample that claimed the photograph shows through there is dropped with it, and
+  the job records a `COMPONENT_LEFT_RASTERIZED` warning naming the layers. The
+  call-to-action background, the contact circles and the pictograms may never be
+  surrendered this way (`validate_assets.mandatory_component_ids`): missing
+  editability there is a failure, not a warning.
+- **The overlay keeps a field whole up to a torn edge.** A flat colour field divided
+  from the photograph by a ragged or hand-cut edge belongs entirely on its side of
+  that edge; the overlay prompt says so, and the extractor must own the field the
+  text sits on and list every instance of a repeated motif. Measured live: an
+  overlay that kept only the ribbon left a hole nothing else filled
+  (a failed region sample in VALIDATE_ASSETS).
+- **A rejected scene is re-asked once.** EXTRACT_SCENE sends the validator's own
+  complaint back to the model and takes the corrected document; if the second
+  answer is also invalid the first complaint is the error. The retry is a vision
+  call, never an image call.
 - ANALYZE_REFERENCE writes `policy.json` (including `reviewStrictness` and
   `reviewPolicy`) and `reference-analysis.json` (content-neutral `anchors`,
   `copyPlacements`, `policyVersion`) once. Stages refuse any stored policy or
@@ -206,13 +250,38 @@ Rules (full set in SPEC section 5):
 - Hebrew defaults to `rtl` / `right`; separate Latin contacts use `ltr`.
 - `object-fit: contain` for full-canvas overlays, logos and cutouts; `cover` only for
   intended photo crops.
-- **Amendment (code-owned shapes):** a design may also contain
-  `<div class="shape sN" id="shape-N" data-shape data-effect="…">` elements, direct
-  children of `.box`, ordered with the images by `z-index` (an image precedes a shape
-  at equal `z-index`). They draw panels, gradients, circles, dots, rings, borders and
-  chevrons with plain CSS (`background`, `linear-gradient`, `border`, `border-radius`,
-  `opacity`, `transform: rotate`). Editor/exporter compatibility is unconfirmed; set
-  `CODE_SHAPES_ENABLED=false` to disable them. See docs/REPAIR_ROUTING.md.
+- **Amendment (code-owned shapes):** a design may also contain editable shapes,
+  emitted in the same structure as text so the editor treats them as ordinary
+  layers:
+
+  ```html
+  <div class="words d3001" id="cta-background" data-role="decoration"
+       data-shape="panel" data-effect="ctaBackground"
+       style="position:absolute;left:80px;top:840px;width:360px;height:96px;
+              box-sizing:border-box;background-color:#FFD43B;border-radius:48px;
+              z-index:9;">
+    <div class="text"></div>
+  </div>
+  ```
+
+  - Direct children of `.box`, ordered with the images by `z-index` (an image
+    precedes a shape at equal `z-index`). No wrapper elements.
+  - `.text` is intentionally empty. `data-role="decoration"` is the only marker
+    that exempts a `.words` element from the empty-text check, the text-layer
+    count and text fitting; `decoration` is deliberately not an allowed text
+    role, so nothing editable can hide behind the exemption. Out-of-bounds and
+    duplicate-id checks still apply.
+  - Classes are numbered from `d3001`, so they never collide with text at
+    `d1001+`. The `id` is derived from the scene layer id (sanitised to
+    `[a-z0-9-]`, suffixed on collision), so it is stable when other layers are
+    added - unlike the positional text ids.
+  - `data-shape` names the primitive and `data-effect` the effect it draws.
+  - They draw panels, gradients, circles, dots, rings, borders and chevrons with
+    plain CSS (`background`, `linear-gradient`, `border`, `border-radius`,
+    `opacity`, `transform: rotate`). Set `CODE_SHAPES_ENABLED=false` to disable
+    them. See docs/REPAIR_ROUTING.md.
+  - Native editor save/reopen is verified in-repo by an EXPORT_DESIGN round trip;
+    verification in the actual editor is pending.
 - Text may also carry `letter-spacing`, `white-space:nowrap`, `-webkit-text-stroke`,
   `paint-order` and `-webkit-text-fill-color:transparent`, only when the scene asks for
   them; `text-align` is always physical (`left`/`right`/`center`).

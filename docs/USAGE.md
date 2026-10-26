@@ -63,6 +63,9 @@ from the shape of the request.
 | `suppliedAssets` | no | Up to 10 images you provide (`logo`, `photo`, `product`, `portrait`). These are used as-is and never regenerated. |
 | `designFreedom` | no | Integer 0-100: how far the design may depart from the reference. Default `0` (strictest). See below. |
 | `reviewStrictness` | no | How strictly differences are judged. Default and only supported value: `"balanced"`. Independent of `designFreedom`. See below. |
+| `layoutDirection` | no | `"auto"` (default), `"rtl"` or `"ltr"`: where the columns sit. See below. |
+| `textDirection` | no | `"auto"` (default), `"rtl"` or `"ltr"`: how the writing runs. |
+| `referenceLayoutPolicy` | no | `"adapt-to-locale"` (default) or `"preserve"`: whether the reference's own composition direction is kept. |
 | `requestId` | **yes** | Your idempotency key. See below. |
 
 **`trustedCallerContext.ownerScope`** establishes who owns the job. It must come
@@ -130,6 +133,39 @@ different photograph is not a failure. Under `"balanced"` review:
 
 Warnings come back with a successful result as `result.warnings` (and `qa.warnings`).
 Nothing that was already in the response changed.
+
+### Direction (`layoutDirection`, `textDirection`, `referenceLayoutPolicy`)
+
+Direction is resolved **before the concept is generated**, so a Hebrew design is
+composed right to left from the start rather than mirrored afterwards - mirroring
+a finished design flips the photograph, the logo and every pictogram with it.
+
+Resolved defaults, in precedence order:
+
+1. **An explicit value in the request.** `layoutDirection: "ltr"` lays the columns
+   out left to right whatever the copy. `textDirection` is separate, because a
+   Hebrew design still contains left-to-right phone numbers.
+2. **Explicit placement in the brief, or `referenceLayoutPolicy: "preserve"`.** A
+   brief that says "text on the left, photography on the right" (in any language),
+   or asks for the reference's composition to be kept, keeps the reference's own
+   direction.
+3. **The locale of the approved copy** (`referenceLayoutPolicy: "adapt-to-locale"`,
+   the default). Hebrew or Arabic copy produces a right-to-left composition: the
+   text column on the right and, in a split layout, the photography on the left.
+   Latin copy produces a left-to-right one.
+
+What is never done: mirroring a photograph, a logo, an icon or a pictogram, and
+reversing the character order of a business name, phone number, email or URL
+inside a right-to-left line. Only column positions move.
+
+The resolved values, the reason and which rule decided them are recorded in the
+versioned policy document (`result.qa` references it), the concept is generated
+and reviewed under them, and the concept review answers
+`compositionDirectionOk`. A wrong direction is a concept defect, corrected within
+the existing concept-correction bound; nothing changes direction after approval.
+
+Leaving all three at their defaults hashes identically to a request that omits
+them, so an existing `requestId` is not a conflict.
 
 ### `designFlow`
 
@@ -277,6 +313,28 @@ the photo and text remain intact.
 pixels from the top-left, its stacking order, and for text its `role` and
 `contentKey`. Useful for building an editing UI.
 
+**What arrives as its own element.** After the concept is approved it is taken
+apart, and what the approved picture showed as one image comes back as separate
+things you can move, restyle, hide or delete on their own:
+
+* the call-to-action background, the circles behind contact pictograms, and
+  decorative panels, rings, dots and chevrons are CSS shapes — a `.words dNNNN`
+  element with an empty `.text` and `data-role="decoration"`;
+* each contact pictogram is its own transparent PNG asset (`icon-phone`,
+  `icon-email`, `icon-location`, `icon-website`) placed in a `.badges` element,
+  so a contact row is three independent layers: the circle, the pictogram and the
+  value;
+* the photograph and the remaining hand-drawn artwork stay as the `background`
+  and `decoration` images.
+
+None of these is painted twice: whatever the layout draws is removed from both
+images, so hiding or moving one leaves nothing behind. If a decorative shape
+could not be separated from the artwork, it stays part of it and the design is
+delivered with a `COMPONENT_LEFT_RASTERIZED` warning naming the layers — the
+picture looks as approved, those shapes just cannot be restyled on their own.
+This never applies to the call-to-action background, the contact circles or the
+pictograms; if one of those cannot be separated, the job fails instead.
+
 **`preview`** is the rendered design as a PNG, for thumbnails. `previewUrl` is the
 same URL under its newer name; `preview` is kept for existing callers.
 
@@ -379,6 +437,7 @@ timeout is retryable; an unapproved font is not.
 | `REFERENCE_ADHERENCE_FAILED` | No concept candidate was free of material (blocking) structural problems after 2 concept correction rounds. Category `reference-adherence`. | Raise `designFreedom` deliberately, or adjust the brief or reference. The service never raises it for you. |
 | `REFERENCE_CONSTRAINT_CONFLICT` | Required content cannot fit the reference layout at this `designFreedom`. | Raise `designFreedom`, shorten the copy or choose another reference. |
 | `CORRECTION_EXHAUSTED` | Still had blocking defects after 2 correction rounds. | Adjust the brief. |
+| `REPAIR_ROUTE_UNRESOLVED` | The review's findings could not be turned into a bounded repair (for example a correction that names no element, or a value outside what the property accepts). No image was generated and the best candidate is preserved. | Resubmit; the message says what could not be routed. |
 | `PROVIDER_OUTCOME_UNKNOWN` | A paid generation timed out; we cannot tell whether it completed. | **Not retried automatically** — a retry is what would pay twice. |
 
 Full list in `lib/errors.py`.

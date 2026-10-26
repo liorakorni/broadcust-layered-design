@@ -61,6 +61,20 @@ If the API rejects one, report it — never substitute a model from memory.
    validation or stage result is reused only when its key (hashes, model, prompt,
    policy version) is identical. FINALIZE delivers the best eligible candidate. See
    `docs/REPAIR_ROUTING.md`.
+3c. **Every element of the concept is classified once, and the plan stays complete.**
+   The scene's `components` say how each element is delivered (`photo`,
+   `editableText`, `editableShape`, `rasterIcon`, `retainedRaster`); a shape or
+   non-photograph image with no entry is rejected, so anything that adds a shape -
+   including a repair - adds its entry too. A component may only stop being
+   editable by being given back to the asset that kept it
+   (`scene_patch.rasterize_shapes`, warning `COMPONENT_LEFT_RASTERIZED`), and the
+   call-to-action background, the contact circles and the pictograms may never be:
+   there, missing editability is a failure. A contact row is always three
+   independent layers (circle, pictogram, value).
+3d. **A Step Functions choice must never read a path a stage might not return.**
+   A choice on an absent path fails the execution uncatchably and leaves the job
+   `RUNNING` with no error. Every repair result carries the `next` that
+   `RepairRoute` reads.
 4. **All geometry is pixels from the canvas top-left.** `fontSize` is px; `lineHeight`
    is a dimensionless multiplier. Never mix normalized 0-1 coordinates with pixels. Any
    vision call that returns coordinates passes `detail="original"`; anything else
@@ -68,7 +82,11 @@ If the API rejects one, report it — never substitute a model from memory.
 5. **Final text is real HTML text.** Never bake final copy into a raster asset; never use
    CSS `background-image`, inline SVG, scripts, or clipping that hides overflow.
 6. **The HTML nesting in `docs/CONTRACTS.md` is verbatim.** Do not add wrapper divs,
-   rename classes, or "improve" the structure.
+   rename classes, or "improve" the structure. An editable shape is a `.words dNNNN`
+   element (from `d3001`) with an empty `.text` child and `data-role="decoration"`,
+   a direct child of `.box`. That marker is the *only* exemption from the empty-text
+   check, the text-layer count and text fitting - never widen it, and never add
+   `decoration` to `ALLOWED_ROLES`.
 7. **Stop and report rather than improvise.** If a provider capability is missing, fail
    with the specified error code. Do not substitute a different model, fake transparency
    by keying out white, or mock a stage to proceed.

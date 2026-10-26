@@ -43,11 +43,16 @@ gradient per design. A repair can add a missing gradient/panel only from a prese
 effect of that kind exists, whoever owns it. Existing jobs are not migrated: a gradient
 baked into a photograph is never painted a second time.
 
-> **Contract amendment.** Shapes are emitted as `<div class="shape sN" id="shape-N"
-> data-shape data-effect="…">`, a direct child of `.box`, between images by `z-index`
-> (an image is drawn before a shape at equal z-index). This extends CONTRACTS §5. The
-> editor/exporter are not in this repository, so compatibility is **unconfirmed**;
-> `CODE_SHAPES_ENABLED=false` disables every shape (nothing is added or planned).
+> **Contract amendment.** Shapes are emitted in the editor's own layer structure:
+> `<div class="words dNNNN" id="<stable-id>" data-role="decoration" data-shape
+> data-effect="…"><div class="text"></div></div>`, a direct child of `.box`, between
+> images by `z-index` (an image is drawn before a shape at equal z-index). Classes
+> run from `d3001`; the id comes from the scene layer id. `data-role="decoration"`
+> is the only exemption from the empty-text check, the text count and text fitting.
+> This extends CONTRACTS §5. The editor/exporter are not in this repository, so
+> compatibility is verified here by an EXPORT_DESIGN round trip and **pending** in
+> the editor itself; `CODE_SHAPES_ENABLED=false` disables every shape (nothing is
+> added or planned).
 
 ## 3. Repair routing
 
@@ -204,6 +209,32 @@ says which candidate was delivered, why, and what the others looked like.
   the old overlay repair is the fallback. `validation.json` records `codeOwned`.
 - **`gradientStrength`.** A layout constraint on a gradient shape (0-1, opacity of the
   darkest stop). Reviews cannot supply CSS strings; colours are `#RRGGBB` only.
+- **A repair result always answers the choice that routes it.** `RepairRoute`
+  branches on `$.repair.next`; a Step Functions choice on a path that is absent
+  fails the execution outright, and that failure cannot be caught - the job is
+  left `RUNNING` with no error recorded. `REPAIR_LIGHT` therefore returns
+  `next: "assemble"` and `REPAIR_ASSET` the stage it needs.
+- **Corrections aimed at an effect are translated into the shape that draws it.**
+  An effect id is not a layer, so properties cannot be set on it. When a layout
+  finding names `add:<effectId>`, names an effect no shape draws, or describes a
+  missing readability shading without naming anything at all, routing turns it
+  into the `addShape` it should have been: the preset's edge comes from the angle
+  the correction asked for, else the finding's region, else the side the text sits
+  on. The translation is recorded in `routing.issues[].translated` (what was
+  asked, what is being done, why). An effect a shape already draws is never taken
+  over, and more than one candidate leaves the finding unresolved.
+- **An added shape is in scope by consequence.** A repair that adds a shape names its
+  elements by what the preset creates (`scene_patch.shape_id_for(effect)`) and the
+  `effects` list that records the new owner, not by an id the review could have
+  known. A round that restyles text and adds a shape is therefore accepted; any
+  other element that changes is still refused as out of scope. The shape is also
+  entered in the decomposition plan, or the patched scene is rejected as
+  incomplete.
+- **The reviewer is told what each property accepts.** `scene_patch.property_help`
+  renders the installed font families and every numeric range and enum from the
+  table the executor validates against. A value outside them is still refused -
+  live, a single out-of-range `letterSpacing` and a single uninstalled font each
+  failed an otherwise finished design.
 - **Planner tolerance (layout-first).** `PLAN_LAYOUT` thins more than four gradient
   stops, snaps rotation to 45 degrees and clamps shape numbers, withdraws a
   layout-owned effect nothing draws, and allows one corrected retry after a schema
