@@ -13,7 +13,7 @@
     },
     {
       "name": "getLayeredDesignStatus",
-      "description": "Retrieve progress or artifact references for a layered design job. Returns status QUEUED, RUNNING, SUCCEEDED or FAILED with the current stage.",
+      "description": "Retrieve progress or artifact references for a layered design job. Returns status QUEUED, RUNNING, SUCCEEDED, SUCCEEDED_WITH_WARNINGS or FAILED with the current stage. SUCCEEDED_WITH_WARNINGS carries usable HTML that has unresolved findings: check needsReview and publishReady before publishing.",
       "parameters": {
         "jobId": {
           "type": "string",

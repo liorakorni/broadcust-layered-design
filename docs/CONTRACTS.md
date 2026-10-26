@@ -306,3 +306,61 @@ its intended backing.
 GPT Image renders only `1024x1024`, `1024x1536` and `1536x1024`. A requested canvas
 (`256..2048` per side) is generated at the closest supported aspect and resampled to the
 target in exactly one place, `lib/validate_assets.py`. No other module rescales geometry.
+
+### Best usable result: `SUCCEEDED_WITH_WARNINGS` and the selected candidate
+
+A design whose quality is unresolved is returned, not discarded. Statuses are now
+`QUEUED`, `RUNNING`, `SUCCEEDED`, `SUCCEEDED_WITH_WARNINGS` and `FAILED`.
+
+- `SUCCEEDED`: the design passed review. `qualityPassed: true`, `publishReady: true`.
+- `SUCCEEDED_WITH_WARNINGS`: structurally valid, editable HTML exists, its assets are
+  available and its snapshot is coherent, but review findings remain, the bounded
+  repairs were used up, a repair made no progress, or a later stage failed after a
+  usable candidate existed. `qualityPassed: false`, `needsReview: true`. The HTML is
+  in `result.html`. `publishReady` is `false` whenever mandatory content is missing
+  or a blocking finding remains; the client must not publish on its own then.
+- `FAILED`: no usable candidate exists (no valid HTML, assets missing, or the job
+  never got as far as assembling one). The error is the original technical error.
+
+Status polling returns the same `status` and an `outcome` object
+(`needsReview`, `publishReady`, `qualityPassed`, `selectedAttempt`, `stopReason`) once
+the result exists. A client that polls until `SUCCEEDED` only must also stop on
+`SUCCEEDED_WITH_WARNINGS`: the job is complete, and the result is available.
+
+New `result` fields (the existing ones are unchanged):
+
+| Field | Meaning |
+|---|---|
+| `selectedAttempt` | the candidate that was delivered |
+| `selectedSnapshotKey` | the versioned design state of that candidate; the HTML, scene, assets, layer map and preview all come from it |
+| `qualityPassed` | review passed with no blocking finding |
+| `needsReview` | a person should look before it is used |
+| `publishReady` | safe to publish without review |
+| `stopReason` | why the pipeline stopped: `APPROVED`, `REPAIR_NO_PROGRESS`, `CORRECTION_EXHAUSTED`, `REPAIR_ROUTE_UNRESOLVED`, or the error code of a later stage that failed after a usable candidate existed |
+| `warnings[]` | `{code, severity, affectedElementIds, message, suggestedAction}` for the selected candidate |
+| `designSelection` | why this candidate won over the others |
+| `diagnostics` | per-candidate findings and, for a failure after a usable candidate, the original technical error |
+
+Candidates are ranked on usability, mandatory content, readability, editability,
+measured fidelity to the approved concept, and remaining findings - not on the
+latest attempt or the fewest blocking findings. A candidate whose stored document no
+longer matches its recorded hash is never returned.
+
+Repair progress is judged from evidence, not from counts. Findings carry a stable
+identity (element or region, requirement, defect type); a repair is a verified
+improvement, a partial improvement, no meaningful change, a verified regression or
+inconclusive, from the concept, the previous and repaired renders and the changed
+regions. A warning being promoted to blocking proves nothing by itself.
+
+Scene fields added for reconstruction: `alignmentGroups` (a shared edge and the
+measured ink edges of the layers on it) and `fillGroups` (shapes that share a fill,
+each keeping its own colour). An editor that moves one layer of an alignment group
+should release it from the group; `scene_patch` already does for x/align changes.
+
+Job metrics now report `renderCalls` apart from `imageCalls`, and `fittedGradients`
+and `codeOwnedEffects` where the layout drew shading in code.
+
+Optional request field `reuseConceptFromJobId` (owner-scoped) rebuilds a design from
+the approved concept of an earlier job of the same owner instead of generating one.
+It is for re-running reconstruction after a pipeline fix; it is not exposed to the
+Bedrock agent.
