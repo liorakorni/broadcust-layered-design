@@ -416,20 +416,35 @@ def _fit_readability(job_id, scene, attempt, concept, background, overlay):
     it is, and the vision-based path and the final review still judge the result.
     """
     drawn = {s.get("effect") for s in scene.get("shapeLayers") or []}
-    for effect in scene.get("effects") or []:
-        if effect["kind"] == "readabilityGradient" and effect["id"] in drawn:
-            return {"effect": "readabilityGradient", "action": "kept", "owner": "layout"}
+    already = next((
+        effect for effect in scene.get("effects") or []
+        if effect["kind"] == "readabilityGradient" and effect["id"] in drawn
+    ), None)
     try:
         fit = readability.fit(concept, background, scene, overlay)
     except Exception as exc:  # a measurement problem must not fail the job
         log.warning("readability fit failed jobId=%s error=%s", job_id, type(exc).__name__)
         return {"effect": "readabilityGradient", "action": "failed", "reason": type(exc).__name__}
-    if fit["action"] != "add":
+    if already is not None:
+        # The extraction drew the gradient itself, from a guess at its edge and extent
+        # (measured live: a full-canvas bottom fade behind a left-hand column, which
+        # the reviewer then rejected three times). Its place in the design stays; its
+        # geometry is replaced by what the pixels say.
+        if fit["action"] != "add":
+            return {"effect": "readabilityGradient", "action": "kept", "owner": "layout"}
+        patched = scene_patch.refit_gradient(scene, already["id"], fit)
+        if patched is None:
+            return {"effect": "readabilityGradient", "action": "kept", "owner": "layout"}
+        action = "refitted"
+    elif fit["action"] != "add":
         return {"effect": "readabilityGradient", "action": "not-needed",
                 "reason": fit["reason"], "measured": fit.get("measured")}
+    else:
+        action = "added"
     try:
-        patched = scene_patch.add_shape(
-            scene, f"gradient-{fit['edge']}", take_over=True, fitted=fit)
+        if action == "added":
+            patched = scene_patch.add_shape(
+                scene, f"gradient-{fit['edge']}", take_over=True, fitted=fit)
     except InvalidScene as exc:
         return {"effect": "readabilityGradient", "action": "not-added",
                 "edge": fit["edge"], "reason": exc.message, "measured": fit["measured"]}
@@ -441,7 +456,7 @@ def _fit_readability(job_id, scene, attempt, concept, background, overlay):
     )
     jobs.add_metric(job_id, "codeOwnedEffects")
     jobs.add_metric(job_id, "fittedGradients")
-    return {"effect": "readabilityGradient", "action": "added", "edge": fit["edge"],
+    return {"effect": "readabilityGradient", "action": action, "edge": fit["edge"],
             "owner": "layout", "scene": stored["key"], "box": fit["box"],
             "stops": fit["stops"], "measured": fit["measured"],
             "imageGenerationCalls": 0}

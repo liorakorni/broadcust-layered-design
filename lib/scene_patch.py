@@ -474,6 +474,32 @@ def add_shape(scene, preset, *, effect_id=None, take_over=False, fitted=None):
     return patched
 
 
+def refit_gradient(scene, effect_id, fitted):
+    """Return a copy of `scene` whose drawn readability gradient has the fitted geometry.
+
+    The shape keeps its id, effect, stacking and class; only where it sits, how far it
+    reaches, its direction and its stops change. None when the scene draws no gradient
+    for `effect_id` (nothing to refit).
+    """
+    patched = copy.deepcopy(scene)
+    shape = next((s for s in patched.get("shapeLayers") or []
+                  if s.get("effect") == effect_id and s.get("kind") == "gradient"), None)
+    if shape is None:
+        return None
+    box = fitted["box"]
+    shape.update({"x": box["x"], "y": box["y"], "width": box["width"],
+                  "height": box["height"], "angle": fitted["angle"],
+                  "stops": [dict(stop) for stop in fitted["stops"]]})
+    measured = fitted.get("measured") or {}
+    for effect in patched.get("effects") or []:
+        if effect["id"] == effect_id:
+            effect["note"] = (
+                f"Fitted from the concept and the cleaned photograph: {fitted['edge']} edge "
+                f"at {measured.get('edgeAlpha', 0):.0%}, {box['width']}x{box['height']}px."
+            )
+    return patched
+
+
 def rasterize_shapes(scene, layer_ids, owner, reason):
     """Give named shape layers back to the artwork that still contains them.
 

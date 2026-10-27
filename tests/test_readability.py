@@ -344,3 +344,30 @@ def test_the_strongest_edge_still_wins_when_the_preferred_one_is_clearly_weaker(
     fit = readability.fit(png(concept_level), flat(150), scene)
 
     assert fit["action"] == "none" or fit["edge"] == "top"
+
+
+def test_a_gradient_the_extraction_guessed_is_refitted_to_the_pixels_not_kept():
+    """Measured live: the extraction drew its own full-canvas bottom fade (0deg) behind a
+    left-hand column; it was 'kept' as layout-owned and the reviewer rejected it three
+    times. Its place in the design stays; its geometry comes from the pixels."""
+    scene = scene_with_text(60, 400)
+    scene["shapeLayers"] = [{
+        "id": "left-readability", "type": "shape", "kind": "gradient",
+        "effect": "effect-readability", "x": 0, "y": 0, "width": 1000, "height": 1000,
+        "zIndex": 0, "color": None, "opacity": 1.0, "radius": 0, "angle": 0,
+        "stops": [{"color": "#000000", "opacity": 0.9, "position": 0.0},
+                  {"color": "#000000", "opacity": 0.0, "position": 1.0}],
+        "borderColor": None, "borderWidth": 0.0, "rotation": 0,
+    }]
+    scene["effects"] = [{"id": "effect-readability", "kind": "readabilityGradient",
+                         "owner": "layout", "note": "guess"}]
+    fit = readability.fit(dark_field("left", 0.6), flat(150), scene)
+    assert fit["action"] == "add" and fit["edge"] == "left"
+
+    patched = scene_patch.refit_gradient(scene, "effect-readability", fit)
+
+    [shape] = patched["shapeLayers"]
+    assert shape["id"] == "left-readability" and shape["zIndex"] == 0     # same layer
+    assert shape["angle"] == 90 and shape["width"] < 1000                 # new geometry
+    assert scene["shapeLayers"][0]["angle"] == 0                          # input untouched
+    assert scene_patch.refit_gradient(scene, "no-such-effect", fit) is None
