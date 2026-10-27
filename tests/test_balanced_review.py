@@ -258,7 +258,8 @@ def test_omitted_and_explicit_balanced_hash_identically_and_like_before(start_pa
     body.pop("designFlow")
     # Added later still: a request accepted before they existed carried none of
     # them, and their defaults mean what its absence meant.
-    for later in ("layoutDirection", "textDirection", "referenceLayoutPolicy"):
+    for later in ("layoutDirection", "textDirection", "referenceLayoutPolicy",
+                  "templateFlexibility"):
         body.pop(later)
     import hashlib
     legacy = hashlib.sha256(

@@ -230,7 +230,7 @@ def test_the_request_hash_is_unchanged_when_the_new_fields_are_default(start_pay
 
     body = parse_start_request(omitted).model_dump(mode="json")
     for field in ("reviewStrictness", "designFlow", "layoutDirection",
-                  "textDirection", "referenceLayoutPolicy"):
+                  "textDirection", "referenceLayoutPolicy", "templateFlexibility"):
         body.pop(field)
     assert hashed == hashlib.sha256(
         json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")

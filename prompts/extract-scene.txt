@@ -119,6 +119,15 @@ circle and its pictogram both pair with that contact's text layer. Use
 "retainedRaster" with pairsWith set only when a button or contact badge truly
 cannot be separated, and say why in the note.
 
+DESIGN BASE ("designBase"): how the structural graphics under the text are delivered.
+- "overlay" (the usual answer): ornaments, borders, torn edges, waves or colour fields
+  lie over the photograph, which shows through the gaps.
+- "css-only": the ONLY structure is a gradient or plain colour fills that you list
+  yourself as shapeLayers, with no ornament, torn edge, wave, border or frame at all.
+  Nothing is then extracted as an image, so say this only when it is plainly true.
+- "full": no photograph shows through anywhere; the graphics fill the canvas.
+Add a one-line note saying what the structural graphics are.
+
 OVERLAY SAMPLES:
 - Report up to 8 regions where the decoration overlay MUST be transparent
   (kind "transparent") because the photograph shows through there.

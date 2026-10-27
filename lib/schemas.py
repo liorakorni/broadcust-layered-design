@@ -729,6 +729,22 @@ class FillGroup(Strict):
         return v
 
 
+DESIGN_BASE_KINDS = ("overlay", "full", "css-only")
+
+
+class DesignBase(Strict):
+    """How the structural design base is delivered, as the extraction saw it.
+
+    "overlay": artwork over the photograph, which shows through windows (the default and
+    what a scene without this field means). "full": nothing shows through; the design may
+    be opaque everywhere. "css-only": the only structure is a gradient or plain fills that
+    the layout already draws, so there is nothing for a raster extraction to produce.
+    """
+
+    representation: Literal["overlay", "full", "css-only"] = "overlay"
+    note: Optional[str] = None
+
+
 class Scene(Strict):
     canvas: Canvas
     textLayers: list[TextLayer] = Field(default_factory=list, max_length=60)
@@ -747,6 +763,11 @@ class Scene(Strict):
     #: written before they existed, which means "no relationship was recorded".
     alignmentGroups: list[AlignmentGroup] = Field(default_factory=list, max_length=20)
     fillGroups: list[FillGroup] = Field(default_factory=list, max_length=10)
+    #: Absent on every scene written before it existed, which means "overlay".
+    designBase: Optional[DesignBase] = None
+    #: Ownership, geometry, dependencies and the CSS fallback (lib/layer_plan.py).
+    #: Validated there; absent on every scene written before it existed.
+    layerPlan: Optional[dict] = None
 
 
 def parse_scene(payload, canvas_width, canvas_height, allowed_content_keys=None,

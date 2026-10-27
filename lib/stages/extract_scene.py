@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 import conf
-from lib import alignment, artifacts, concept_sample, jobs, prompts, schemas
+from lib import alignment, artifacts, concept_sample, jobs, layer_plan, prompts, schemas
 from lib.errors import InvalidScene, Stage
 from lib.stages import independent
 from lib.providers import vision
@@ -35,9 +35,18 @@ SCENE_SCHEMA = {
     "additionalProperties": False,
     "required": [
         "canvas", "textLayers", "imageLayers", "overlaySamples", "shapeLayers",
-        "effects", "components",
+        "effects", "components", "designBase",
     ],
     "properties": {
+        "designBase": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["representation", "note"],
+            "properties": {
+                "representation": {"type": "string", "enum": list(schemas.DESIGN_BASE_KINDS)},
+                "note": {"type": ["string", "null"]},
+            },
+        },
         "canvas": {
             "type": "object",
             "additionalProperties": False,
@@ -314,6 +323,17 @@ def run(job_id, attempt, asset_id=None):
     # measured from pixels and recorded; ASSEMBLE turns them into positions.
     document["alignmentGroups"] = alignment.detect_groups(concept_bytes, document)
     document["fillGroups"] = alignment.fill_groups(document)
+
+    # Who owns what, and what to do if the template cannot be used, persisted BEFORE any
+    # asset is generated (layered-v2). A design whose base is only a gradient is delivered
+    # in CSS and never sent to the image model: nothing is left for it to embellish.
+    css_only = None
+    if jobs.is_v2(job):
+        document["layerPlan"] = layer_plan.build(document, concept_bytes)
+        if document["layerPlan"]["template"]["representation"] == "css-only":
+            document, css_only = layer_plan.apply_fallback(
+                document, document["layerPlan"]["template"]["reason"],
+                "TEMPLATE_CSS_ONLY", deliberate=True)
     document = schemas.parse_scene(          # nothing unvalidated is stored
         document,
         canvas["width"],
@@ -334,6 +354,14 @@ def run(job_id, attempt, asset_id=None):
         "alignmentGroups": len(document.get("alignmentGroups") or []),
         "fillGroups": len(document.get("fillGroups") or []),
     }
+    if document.get("layerPlan"):
+        plan = document["layerPlan"]
+        recorded["layerPlan"] = {
+            "version": plan["version"], "revision": plan["revision"],
+            "templateRepresentation": plan["template"]["representation"],
+        }
+    if css_only:
+        recorded["templateCssOnly"] = css_only
     if corrections or ignored or dropped_samples:
         # Kept beside the scene rather than inside it: the scene is the design,
         # and this is the evidence of how it was adjusted.
