@@ -105,10 +105,18 @@ def test_overlay_runs_before_the_photo_which_is_repainted_around_it():
     assert STATES["CleanPhoto"]["Next"] == "IndependentAssets"
 
 
-def test_a_repaired_overlay_gets_a_photo_repainted_around_it():
-    """The photo's mask is the overlay's shape, so a repaired overlay needs a
-    rebuilt photo before the layers are validated together."""
-    assert STATES["RepairOverlay"]["Next"] == "RebuildPhoto"
+def test_a_legacy_repaired_overlay_still_gets_a_photo_repainted_around_it():
+    """The photo's mask is the overlay's shape, so on the legacy path a repaired overlay
+    needs a rebuilt photo; a layered-v2 job answers rebuildPhoto=false and skips it."""
+    assert STATES["RepairOverlay"]["Next"] == "AfterOverlayRepair"
+    after = STATES["AfterOverlayRepair"]
+    assert after["Default"] == "RebuildPhoto"         # no answer means the legacy behaviour
+    skip = after["Choices"][0]
+    assert skip["Next"] == "ValidateAssets"
+    guards = {tuple(sorted(c.items())) for c in skip["And"]}
+    assert (("IsPresent", True), ("Variable", "$.overlayRepair.artifacts.rebuildPhoto")) in guards
+    assert (("BooleanEquals", False),
+            ("Variable", "$.overlayRepair.artifacts.rebuildPhoto")) in guards
     rebuild = STATES["RebuildPhoto"]
     assert rebuild["Parameters"]["operation"] == "REBUILD_PHOTO"
     assert rebuild["Parameters"]["stage"] == "CLEAN_PHOTO"
@@ -224,7 +232,7 @@ def test_an_asset_repair_regenerates_only_the_named_asset_then_revalidates():
     assert routes == {"photo": "RepairPhoto", "overlay": "RepairOverlay"}
     assert STATES["RepairPhoto"]["Parameters"]["operation"] == "REPAIR_PHOTO"
     assert STATES["RepairPhoto"]["Next"] == "ValidateAssets"
-    assert STATES["RepairOverlay"]["Next"] == "RebuildPhoto"
+    assert STATES["RepairOverlay"]["Next"] == "AfterOverlayRepair"
 
 
 def test_repairs_advance_the_attempt_counter():
@@ -521,8 +529,9 @@ def test_a_repairable_overlay_routes_to_the_repair_rather_than_failing():
 def test_the_repair_returns_to_validation():
     """A repair nobody re-checks is just a second way to ship a broken overlay.
 
-    The photo is rebuilt around the repaired overlay on the way back."""
-    assert STATES["RepairOverlay"]["Next"] == "RebuildPhoto"
+    On the legacy path the photo is rebuilt around the repaired overlay on the way back."""
+    assert STATES["RepairOverlay"]["Next"] == "AfterOverlayRepair"
+    assert STATES["AfterOverlayRepair"]["Default"] == "RebuildPhoto"
     assert STATES["RebuildPhoto"]["Next"] == "ValidateAssets"
     assert STATES["RepairOverlay"]["Parameters"]["operation"] == "REPAIR_OVERLAY"
 

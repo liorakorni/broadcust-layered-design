@@ -76,6 +76,44 @@ def snapshot(job):
     }
 
 
+def routing_view(job):
+    """`(counts, limits)` per routing category, for a layered-v2 job.
+
+    The router reasons in categories (content, typography, layout, asset, concept); the
+    budget is in kinds. The three DOM/CSS categories share ONE allowance, so two content
+    rounds and two layout rounds cannot add up to four; the asset category is the template
+    allowance plus any granted photograph repair; concept keeps its own bound.
+    """
+    import conf
+
+    dom_used, dom_limit = used(job, "domCss"), limits(job)["domCss"]
+    counts = {category: dom_used for category in ("content", "typography", "layout")}
+    caps = {category: dom_limit for category in ("content", "typography", "layout")}
+    # The template allowance plus the one photograph repair that could still be granted;
+    # which of the two a given repair spends is decided by `asset_kind` / `can_spend`.
+    counts["asset"] = used(job, "templateImage") + used(job, "photoImage")
+    caps["asset"] = limits(job)["templateImage"] + max(limits(job)["photoImage"], PHOTO_REPAIR_CAP)
+    counts["concept"] = int((job or {}).get("conceptRounds", 0) or 0)
+    caps["concept"] = conf.MAX_CONCEPT_ROUNDS
+    return counts, caps
+
+
+def asset_kind(asset_target):
+    """The budget kind a repair of this asset spends."""
+    return "photoImage" if asset_target == "background" else "templateImage"
+
+
+def can_spend(job, kind):
+    """Could `kind` still be spent: its allowance is not used up (a photograph repair may
+    also be granted, once, if none has been)."""
+    _check(kind)
+    if kind == "photoImage":
+        granted = ((job or {}).get("repairBudget") or {}).get("photoGrant")
+        allowance = limits(job)["photoImage"] if granted else PHOTO_REPAIR_CAP
+        return used(job, kind) < allowance
+    return remaining(job, kind) > 0
+
+
 def consume(job_id, kind):
     """Spend one unit of `kind`. Returns the new total, or None when none is left.
 

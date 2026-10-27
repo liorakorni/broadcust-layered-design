@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 
 from lib import (
-    alignment, artifacts, assemble_html, geometry, jobs, media, render as renderer,
+    alignment, artifacts, assemble_html, geometry, jobs, layer_plan, media, render as renderer,
     typography_check,
 )
 from lib.errors import RenderFailed, Stage
@@ -31,6 +31,7 @@ def assemble(job_id, attempt, asset_id=None):
     # same scene always assembles to the same document and a box that was sized a
     # few pixels differently from its neighbours does not move the shared edge.
     scene, aligned = alignment.apply(scene)
+    scene, _plan_moved = layer_plan.sync(scene)       # the plan stays true to the scene
     html = assemble_html.assemble(scene, published["urls"], canvas)
 
     requested = {l["id"]: l["fontSize"] for l in scene["textLayers"]}
@@ -206,10 +207,12 @@ def _asset_keys(job):
         # only generated asset is the text-free photograph.
         keys = {"background": produced[Stage.GENERATE_PHOTO]["background"]}
     else:
-        keys = {
-            "background": produced[Stage.CLEAN_PHOTO]["background"],
-            "decoration": produced[Stage.DECORATION_OVERLAY]["decoration"],
-        }
+        keys = {"background": produced[Stage.CLEAN_PHOTO]["background"]}
+        template = produced[Stage.DECORATION_OVERLAY]
+        # A layered-v2 design whose base is CSS (a gradient-only base, or a template that
+        # was replaced by the fallback) delivers no template raster at all.
+        if not template.get("omitted"):
+            keys["decoration"] = template["decoration"]
     for entry in jobs.asset_items(job):
         keys[entry["assetId"]] = entry["key"]
     return keys

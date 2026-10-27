@@ -234,7 +234,9 @@ def _tolerance(flexibility):
 def _budget_attributes():
     from lib import repair_budget
 
-    return repair_budget.initial_attributes()
+    # `fallbacksUsed` is seeded for the same reason as the other maps: a nested write to
+    # a missing parent is rejected.
+    return {**repair_budget.initial_attributes(), "fallbacksUsed": {}}
 
 
 def pipeline_version(job):
@@ -443,6 +445,29 @@ def record_warning(job_id, warning):
             ExpressionAttributeValues={":m": {key: storable(warning)}, ":now": _now()},
         )
     return warning
+
+
+def record_fallback(job_id, entry):
+    """Record that a deterministic fallback replaced a generated asset.
+
+    Keyed by kind and code so a stage that runs again does not list it twice. Returns the
+    stored entry.
+    """
+    key = f"{entry['kind']}:{entry.get('code') or ''}"
+    _update(
+        Key={"pk": f"JOB#{job_id}"},
+        UpdateExpression="SET fallbacksUsed.#k = :v, updatedAt = :now",
+        ExpressionAttributeNames={"#k": key},
+        ExpressionAttributeValues={":v": storable({**entry, "recordedAt": _now()}),
+                                   ":now": _now()},
+    )
+    return entry
+
+
+def fallbacks_used(job):
+    """Every fallback recorded for this job, in a stable order."""
+    recorded = job.get("fallbacksUsed") or {}
+    return [recorded[key] for key in sorted(recorded)]
 
 
 def stage_warnings(job):

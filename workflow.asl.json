@@ -395,7 +395,7 @@
     "RepairOverlay": {
       "Type": "Task",
       "Resource": "${StageFunctionArn}",
-      "Comment": "Bounded targeted overlay repair (SPEC section 4). The repair count is held on the job, not here, so task retries cannot buy extra rounds.",
+      "Comment": "Bounded targeted template (Design Base) repair. The count is held on the job (lib/repair_budget.py), not here, so task retries cannot buy extra rounds.",
       "Parameters": {
         "jobId.$": "$.jobId",
         "stage": "DECORATION_OVERLAY",
@@ -413,7 +413,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "RebuildPhoto"
+      "Next": "AfterOverlayRepair"
     },
     "RebuildPhoto": {
       "Type": "Task",
@@ -902,6 +902,26 @@
         }
       ],
       "Next": "ExtractScene"
+    },
+    "AfterOverlayRepair": {
+      "Type": "Choice",
+      "Comment": "The legacy path repainted the photograph around every repaired overlay. A layered-v2 template repair does not: the Background Image is photographic content only and was not what was wrong, and the stage reports rebuildPhoto=false. A state that carries no answer keeps the legacy behaviour.",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.overlayRepair.artifacts.rebuildPhoto",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.overlayRepair.artifacts.rebuildPhoto",
+              "BooleanEquals": false
+            }
+          ],
+          "Next": "ValidateAssets"
+        }
+      ],
+      "Default": "RebuildPhoto"
     }
   }
 }

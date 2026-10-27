@@ -123,6 +123,13 @@ def run(job_id, attempt, asset_id=None):
 
         return plan_layout.validate_photo(job_id, job, attempt)
 
+    if jobs.is_v2(job):
+        # Technical checks only, so the first HTML does not wait on a visual verdict
+        # about an asset that the composite review judges anyway.
+        from lib.stages import validate_v2
+
+        return validate_v2.run(job_id, attempt, job)
+
     from lib.stages.assemble import scene_key_for
 
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}

@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import conf
 from lib import (
-    artifacts, content_check, design_state, repair_progress, telemetry, jobs, media, prompts,
+    artifacts, content_check, design_state, repair_budget, repair_progress, telemetry, jobs, media,
+    prompts,
     repair_routing, review_policy, scene_patch, schemas, visual_compare,
 )
 from lib import candidates as candidates_module
@@ -180,6 +181,9 @@ def run(job_id, attempt, asset_id=None):
     issues, _ = review_policy.split_issues(reported)
     warnings = [i for i in reported if i["severity"] != review_policy.BLOCKING]
     measured = _render_problems(produced, scene, job)
+    # layered-v2: what validation measured about the template is judged here, on the
+    # assembled composite, instead of by a standalone review before the first HTML.
+    measured += _template_issues(job_id, job, produced, scene)
     # A measured finding that is only a warning (a shared edge a few pixels off)
     # is reported and judged by the progress check, never routed as blocking.
     issues.extend(i for i in measured if i["severity"] == review_policy.BLOCKING)
@@ -312,12 +316,17 @@ def _route(job, scene, copy_items, produced, issues, verdict, approved, attempt,
         and job.get("flow") != "layout-first"
         and not job.get("reuseConceptFrom"),
     }
-    counts = jobs.repair_counts(job)
-    counts["concept"] = int(job.get("conceptRounds", 0) or 0)
+    if jobs.is_v2(job):
+        # One persisted budget shared by every stage (lib/repair_budget.py).
+        counts, repair_limits = repair_budget.routing_view(job)
+    else:
+        counts = jobs.repair_counts(job)
+        counts["concept"] = int(job.get("conceptRounds", 0) or 0)
+        repair_limits = conf.MAX_REPAIRS
     candidates = jobs.design_candidates(job)
     applied = [c["patchDigest"] for c in candidates if c.get("patchDigest") and c.get("route") == repair_routing.ROUTE_LIGHT]
     routing = repair_routing.plan_route(
-        issues, ctx, counts=counts, limits=conf.MAX_REPAIRS, applied_patches=applied
+        issues, ctx, counts=counts, limits=repair_limits, applied_patches=applied
     )
     # Did the previous repair help? Decided from the findings matched across the two
     # reviews and from the pixels, not from how many findings there are. A count
@@ -359,8 +368,30 @@ def _route(job, scene, copy_items, produced, issues, verdict, approved, attempt,
                 }
         # B (partial improvement) and E (uncertain) both allow another supported
         # targeted patch inside the existing budget: neither proves damage.
+    if jobs.is_v2(job):
+        routing = _within_asset_budget(job, routing)
+        routing["budget"] = repair_budget.snapshot(job)
     routing["fingerprint"] = now
     return routing
+
+
+def _within_asset_budget(job, routing):
+    """An asset repair is spent from ITS allowance: the template's, or the photograph's.
+
+    The router counts both together, which is not precise enough to say that a design
+    whose one template repair is spent cannot have another, so the check is made here on
+    the kind the routed repair would actually spend.
+    """
+    if routing["route"] != repair_routing.ROUTE_ASSET:
+        return routing
+    routed = [r for r in routing["issues"] if r["route"] == repair_routing.ROUTE_ASSET]
+    kind = repair_budget.asset_kind(routed[0]["assetTarget"]) if routed else "templateImage"
+    if repair_budget.can_spend(job, kind):
+        return routing
+    return {
+        **routing, "route": repair_routing.ROUTE_EXHAUSTED, "imageGenerationRequired": False,
+        "reason": f"the {kind} repair budget is spent",
+    }
 
 
 def _stop(routing, reason):
@@ -598,6 +629,45 @@ def _render_problems(produced, scene, job):
                 severity=problem.get("severity") or review_policy.BLOCKING,
             )
         )
+    return issues
+
+
+def _template_issues(job_id, job, produced, scene):
+    """The Design Base findings of this candidate's validation, as routed review issues.
+
+    Only for a layered-v2 job whose candidate still carries the template raster. A MAJOR
+    finding (artwork the concept does not have, spanning a large part of the canvas) is
+    blocking and routes to the one template repair; a minor one is a warning. Both carry
+    the persisted tolerance, so the repair is judged by the bar that generated it.
+    """
+    if not jobs.is_v2(job):
+        return []
+    pointer = (produced.get(Stage.VALIDATE_ASSETS) or {}).get("validation")
+    if not pointer:
+        return []
+    template = (artifacts.get_json(job_id, pointer).get("template") or {})
+    decoration = next((l for l in scene["imageLayers"] if l["type"] == "decoration"), None)
+    if not template.get("present") or decoration is None:
+        return []
+    tolerance = template.get("tolerance") or {}
+    issues = []
+    for found in template.get("findings") or []:
+        blocking = found["severity"] == "major"
+        issue = _technical_issue(
+            found["code"], decoration["id"], found["message"], layer_id=decoration["id"],
+            target="asset" if blocking else None,
+            element_ids=[decoration["id"]] if blocking else (),
+            severity=review_policy.BLOCKING if blocking else review_policy.WARNING,
+        )
+        if blocking:
+            issue["assetId"] = "decoration"
+            issue["requiresImageGeneration"] = True
+            issue["suggestion"] = (
+                "Regenerate the design base from the approved concept without the "
+                f"extra artwork (template tolerance {tolerance.get('profile', 'default')})."
+            )
+        issue["region"] = found.get("region")
+        issues.append(issue)
     return issues
 
 
@@ -1154,6 +1224,9 @@ def _require_downstream_complete(job, produced, review, approved_concept):
     """
     layout_first = job.get("flow") == "layout-first"
     for stage, pointer in (_REQUIRED_POINTERS_LAYOUT_FIRST if layout_first else _REQUIRED_POINTERS):
+        if (stage == Stage.DECORATION_OVERLAY and jobs.is_v2(job)
+                and (produced.get(stage) or {}).get("omitted")):
+            continue            # the design base is CSS: recorded as omitted, not missing
         if not (produced.get(stage) or {}).get(pointer):
             raise ReviewBlocked(
                 f"Mandatory stage output {stage}.{pointer} is missing, so the "

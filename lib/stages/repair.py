@@ -25,7 +25,7 @@ import re
 import conf
 from lib import (
     artifacts, assemble_html, content_check, dependencies, design_state, jobs,
-    policy_context, repair_routing, scene_patch, schemas,
+    policy_context, repair_budget, repair_routing, scene_patch, schemas,
 )
 from lib.errors import (
     AssemblyFailed, AssetInvalid, CorrectionExhausted, MandatoryContentMissing,
@@ -154,11 +154,18 @@ def light(job_id, attempt, asset_id=None):
     # Persisted before the budget is spent so a retried task returns this record.
     artifacts.put_json(record_key, {**record, "result": result})
 
-    for category in routing["categories"]:
-        if jobs.bump_repair(job_id, category, conf.MAX_REPAIRS[category]) is None:
+    if jobs.is_v2(job):
+        # One DOM/CSS allowance for every category together (lib/repair_budget.py).
+        if repair_budget.consume(job_id, "domCss") is None:
             raise CorrectionExhausted(
-                f"The {category} repair budget is spent; the correction was not applied."
+                "The DOM/CSS repair budget is spent; the correction was not applied."
             )
+    else:
+        for category in routing["categories"]:
+            if jobs.bump_repair(job_id, category, conf.MAX_REPAIRS[category]) is None:
+                raise CorrectionExhausted(
+                    f"The {category} repair budget is spent; the correction was not applied."
+                )
     jobs.set_working_scene(
         job_id,
         {"key": stored_scene["key"], "forAttempt": attempt + 1, "baseVersion": base["version"]},
@@ -227,10 +234,23 @@ def asset(job_id, attempt, asset_id=None):
     artifacts.put_json(record_key, {"attempt": attempt, "instruction": instruction,
                                     "patchDigest": routing.get("patchDigest"), "result": result})
 
-    if jobs.bump_repair(job_id, "asset", conf.MAX_REPAIRS["asset"]) is None:
+    v2 = jobs.is_v2(job)
+    if v2:
+        kind = repair_budget.asset_kind(target)
+        if kind == "photoImage":
+            # The one exception to "a template repair never rebuilds the photograph": a
+            # defect in the photograph itself, named by the review. Documented, capped at
+            # one, and recorded with the job; never granted as a side effect of anything.
+            repair_budget.grant_photo_repair(
+                job_id, instruction, evidence={"attempt": attempt, "route": "asset"})
+        if repair_budget.consume(job_id, kind) is None:
+            raise CorrectionExhausted(f"The {kind} repair budget is spent; nothing was regenerated.")
+    elif jobs.bump_repair(job_id, "asset", conf.MAX_REPAIRS["asset"]) is None:
         raise CorrectionExhausted("The asset repair budget is spent; nothing was regenerated.")
     if step == "photo":
         jobs.set_photo_repair(job_id, {"instruction": instruction, "forAttempt": attempt + 1})
+    elif v2:
+        jobs.record_overlay_defect(job_id, instruction)
     else:
         # The overlay repair has its own bound, shared with validation's repairs.
         if jobs.bump_counter(job_id, "overlayRepairs", conf.MAX_OVERLAY_REPAIRS) is None:

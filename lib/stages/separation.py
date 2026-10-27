@@ -67,6 +67,7 @@ def _design_base(job_id, attempt, job):
         jobs.record_artifacts(job_id, Stage.DECORATION_OVERLAY, attempt, {
             "omitted": True, "reason": reason[:400],
             "representation": (plan.get("template") or {}).get("representation", "css-only"),
+            "conceptSha256": jobs.approved_concept(job)["sha256"],
         })
         return {"omitted": True, "reason": reason[:400], "imageGenerationCalls": 0}
 
@@ -207,7 +208,16 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
     with Image.open(io.BytesIO(concept)) as img:
         size = img.size
     disbelieved, mask_notes = None, {}
+    mask_overlay = overlay
     if jobs.is_v2(job) and overlay is not None:
+        try:
+            validate_assets.load_rgba(overlay)
+        except AssetInvalid:
+            # An unusable template is dropped by validation (CSS fallback). Until then it
+            # contributes nothing to the photograph's mask, rather than failing here.
+            mask_overlay = None
+            mask_notes["templateUndecodable"] = True
+    if jobs.is_v2(job) and mask_overlay is not None:
         # Do not repaint the photograph where the template invented artwork: the real
         # photograph is under it, and repainting it is how a defective template used to
         # damage the second layer as well.
@@ -219,7 +229,7 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
                 concept, overlay, scene, tolerance, size=size)
             mask_notes["disbelievedRegions"] = len(checked["regions"])
     mask, edit_fraction = edit_mask.build_clean_photo_mask(
-        size, overlay, scene, disbelieved=disbelieved)
+        size, mask_overlay, scene, disbelieved=disbelieved)
     log.info("clean photo mask editFraction=%.3f", edit_fraction)
 
     prompt = prompts.render("clean-photo", width=canvas["width"], height=canvas["height"])
@@ -232,7 +242,9 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
         )
     suffix = f"-after-repair-{int(job.get('overlayRepairs', 0) or 0)}" if after_repair else ""
     if instruction:
-        suffix = f"-repair-{int(job.get('repairs_asset', 0) or 0)}"
+        suffix = "-repair-" + str(
+            repair_budget.used(job, "photoImage") if jobs.is_v2(job)
+            else int(job.get("repairs_asset", 0) or 0))
 
     # Reuse the stored photograph when every input is identical. A repair (with
     # an instruction, or against a repaired overlay) is a deliberate new
