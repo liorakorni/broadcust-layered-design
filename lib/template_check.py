@@ -73,32 +73,10 @@ def compare(concept_bytes, template_bytes, scene, tolerance=None):
     tol = tolerance["tolerances"]
     invariants = tolerance["invariants"]
 
-    concept = _load_rgb(concept_bytes)
-    template = _load_rgba(template_bytes)
-    alpha = template.getchannel("A")
-    rgb = template.convert("RGB")
-
-    excluded = _excluded_mask(scene, concept)
-    opaque = alpha.point(lambda a: 255 if a >= OPAQUE_ALPHA else 0)
-    judged = ImageChops.multiply(opaque, ImageChops.invert(excluded))
-
-    reach = max(1, round(tol["contourShift"] * WORK))
-    major_reach = max(reach, round(invariants.get("majorReach", template_policy.MAJOR_REACH) * WORK))
-    # Two maps. Beyond the PROFILE's reach a pixel is a local contour difference (minor,
-    # and only when the profile is tighter than the variation). Beyond the fixed
-    # MAJOR reach it is artwork the concept does not have at all.
-    # The concept as a reference for "is there artwork like this nearby": the pixels of
-    # text and layout-owned shapes are painted a colour no artwork has, so a yellow
-    # headline or button next to an added yellow border cannot vouch for it.
-    reference = Image.composite(Image.new("RGB", concept.size, (255, 0, 255)),
-                                concept, excluded)
-    near_profile = _nearest_difference(rgb, reference, reach)
-    near_major = near_profile if major_reach == reach else \
-        _nearest_difference(rgb, reference, major_reach)
-    differs_profile = ImageChops.multiply(
-        near_profile.point(lambda d: 255 if d > COLOUR_MISMATCH else 0), judged)
-    added = ImageChops.multiply(
-        near_major.point(lambda d: 255 if d > COLOUR_MISMATCH else 0), judged)
+    maps = _maps(concept_bytes, template_bytes, scene, tolerance)
+    concept, rgb, alpha = maps["concept"], maps["rgb"], maps["alpha"]
+    judged, added, reach = maps["judged"], maps["added"], maps["reach"]
+    differs_profile = maps["differsProfile"]
 
     area = float(WORK * WORK)
     regions = _regions(added, rgb, area)
@@ -177,6 +155,54 @@ def compare(concept_bytes, template_bytes, scene, tolerance=None):
         "major": any(f["severity"] == "major" for f in findings),
     }
 
+
+
+def _maps(concept_bytes, template_bytes, scene, tolerance):
+    """The per-pixel maps the check and the photograph mask both read."""
+    tol = tolerance["tolerances"]
+    invariants = tolerance["invariants"]
+
+    concept = _load_rgb(concept_bytes)
+    template = _load_rgba(template_bytes)
+    alpha = template.getchannel("A")
+    rgb = template.convert("RGB")
+
+    excluded = _excluded_mask(scene, concept)
+    opaque = alpha.point(lambda a: 255 if a >= OPAQUE_ALPHA else 0)
+    judged = ImageChops.multiply(opaque, ImageChops.invert(excluded))
+
+    reach = max(1, round(tol["contourShift"] * WORK))
+    major_reach = max(reach, round(invariants.get("majorReach", template_policy.MAJOR_REACH) * WORK))
+    # Two maps. Beyond the PROFILE's reach a pixel is a local contour difference (minor,
+    # and only when the profile is tighter than the variation). Beyond the fixed
+    # MAJOR reach it is artwork the concept does not have at all.
+    # The concept as a reference for "is there artwork like this nearby": the pixels of
+    # text and layout-owned shapes are painted a colour no artwork has, so a yellow
+    # headline or button next to an added yellow border cannot vouch for it.
+    reference = Image.composite(Image.new("RGB", concept.size, (255, 0, 255)),
+                                concept, excluded)
+    near_profile = _nearest_difference(rgb, reference, reach)
+    near_major = near_profile if major_reach == reach else \
+        _nearest_difference(rgb, reference, major_reach)
+    differs_profile = ImageChops.multiply(
+        near_profile.point(lambda d: 255 if d > COLOUR_MISMATCH else 0), judged)
+    added = ImageChops.multiply(
+        near_major.point(lambda d: 255 if d > COLOUR_MISMATCH else 0), judged)
+    return {"concept": concept, "rgb": rgb, "alpha": alpha, "judged": judged,
+            "added": added, "reach": reach, "differsProfile": differs_profile}
+
+
+def added_artwork_mask(concept_bytes, template_bytes, scene, tolerance=None, size=None, grow=7):
+    """An L mask, 255 where the template has artwork the concept does not.
+
+    Used to stop CLEAN_PHOTO treating a defective template's extra artwork as ground to
+    repaint: the photograph is cleaned only where the concept really has artwork.
+    `grow` widens it so the antialiased edge of an added stroke is covered too.
+    """
+    tolerance = tolerance or template_policy.resolve(None)
+    added = _maps(concept_bytes, template_bytes, scene, tolerance)["added"]
+    added = added.filter(ImageFilter.MaxFilter(grow))
+    return added.resize(size, Image.BILINEAR).point(lambda v: 255 if v >= 64 else 0) if size else added
 
 def _added_finding(region):
     box = region["box"]

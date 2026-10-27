@@ -25,8 +25,8 @@ import logging
 
 import conf
 from lib import (
-    artifacts, edit_mask, jobs, prompts, provider_trace,
-    stage_cache, telemetry, validate_assets,
+    artifacts, design_base, edit_mask, jobs, prompts, provider_trace,
+    repair_budget, stage_cache, telemetry, template_check, template_policy, validate_assets,
 )
 from lib.errors import AssetInvalid, Stage
 from lib.providers import image
@@ -35,6 +35,9 @@ log = logging.getLogger("layered-design.separation")
 
 
 def decoration_overlay(job_id, attempt, asset_id=None):
+    job = jobs.get_job_unscoped(job_id)
+    if jobs.is_v2(job):
+        return _design_base(job_id, attempt, job)
     return _separate(
         job_id,
         attempt,
@@ -43,6 +46,36 @@ def decoration_overlay(job_id, attempt, asset_id=None):
         artifact_name="overlay.png",
         label="decoration",
         transparent=True,
+    )
+
+
+def _scene_of(job_id, job):
+    return artifacts.get_json(job_id, job["artifacts"][Stage.EXTRACT_SCENE]["scene"])
+
+
+def _design_base(job_id, attempt, job):
+    """The Design Base extraction of a layered-v2 job: ownership-plan prompt, or no call.
+
+    A design whose base is CSS (a gradient, or a fallback already chosen) has nothing for
+    the provider to extract, and the absence is recorded as such: the later stages read
+    `omitted` rather than guessing from a missing pointer.
+    """
+    scene = _scene_of(job_id, job)
+    if not any(l["type"] == "decoration" for l in scene.get("imageLayers") or []):
+        plan = scene.get("layerPlan") or {}
+        reason = (plan.get("template") or {}).get("reason") or "The design base is drawn in CSS."
+        jobs.record_artifacts(job_id, Stage.DECORATION_OVERLAY, attempt, {
+            "omitted": True, "reason": reason[:400],
+            "representation": (plan.get("template") or {}).get("representation", "css-only"),
+        })
+        return {"omitted": True, "reason": reason[:400], "imageGenerationCalls": 0}
+
+    concept = _concept_bytes(job_id, job)
+    prompt, info = design_base.build_prompt(scene, concept, template_policy.for_job(job))
+    return _separate(
+        job_id, attempt, stage=Stage.DECORATION_OVERLAY, prompt_name="design-base",
+        artifact_name="overlay.png", label="decoration", transparent=True,
+        prompt=prompt, notes=info,
     )
 
 
@@ -70,21 +103,35 @@ def repair_overlay(job_id, attempt, asset_id=None):
     concept = _concept_bytes(job_id, job)
 
     defect = (job.get("overlayDefect") or "").strip()
-    prompt = (
-        prompts.render(
-            "decoration-overlay", width=canvas["width"], height=canvas["height"],
-            components=_removal_block(job_id, job),
+    v2 = jobs.is_v2(job)
+    notes = {"defect": defect[:400]}
+    if v2:
+        # Same ownership-plan request as the first extraction, plus the one finding.
+        prompt, info = design_base.build_prompt(
+            _scene_of(job_id, job), concept, template_policy.for_job(job),
+            defect=defect or "The previous design base differed from the concept.")
+        notes.update(info)
+        prompt_name = "design-base+design-base-repair"
+    else:
+        prompt = (
+            prompts.render(
+                "decoration-overlay", width=canvas["width"], height=canvas["height"],
+                components=_removal_block(job_id, job),
+            )
+            + "\n\n"
+            + prompts.render(
+                "repair-overlay",
+                defects=prompts.bullet_list(
+                    [defect] if defect else ["The previous overlay failed validation."]
+                ),
+            )
         )
-        + "\n\n"
-        + prompts.render(
-            "repair-overlay",
-            defects=prompts.bullet_list(
-                [defect] if defect else ["The previous overlay failed validation."]
-            ),
-        )
-    )
+        prompt_name = "decoration-overlay+repair-overlay"
 
-    round_number = int(job.get("overlayRepairs", 1) or 1)
+    if v2:
+        round_number = max(1, repair_budget.used(job, "templateImage"))
+    else:
+        round_number = int(job.get("overlayRepairs", 1) or 1)
     result = image.edit(
         prompt,
         concept,
@@ -100,10 +147,10 @@ def repair_overlay(job_id, attempt, asset_id=None):
     )
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
     _trace(job_id, Stage.DECORATION_OVERLAY, attempt, f"provider-trace-overlay-repair-{round_number}.json",
-           prompt_name="decoration-overlay+repair-overlay", prompt=prompt, concept=concept,
+           prompt_name=prompt_name, prompt=prompt, concept=concept,
            mask=None, result=result, stored=stored,
            operation_id=f"{job_id}:overlay_repair:{round_number}",
-           notes={"defect": defect[:400]})
+           notes=notes)
     # Repoints DECORATION_OVERLAY at the repaired bytes, so the re-validation
     # that follows reads the repair rather than the overlay it just rejected.
     jobs.record_artifacts(
@@ -121,6 +168,11 @@ def repair_overlay(job_id, attempt, asset_id=None):
         "sha256": stored["sha256"],
         "repairRound": round_number,
         "requestId": result["requestId"],
+        # The workflow's next step reads this. A layered-v2 template repair never rebuilds
+        # the photograph (Background Image is photographic content only, and it was not
+        # what was wrong); the legacy path always did, which is where the fixture job's
+        # two extra photo calls came from.
+        "rebuildPhoto": not v2,
     }
 
 
@@ -139,19 +191,35 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
     concept = _concept_bytes(job_id, job)
 
     overlay_ref = (job.get("artifacts") or {}).get(Stage.DECORATION_OVERLAY) or {}
-    if not overlay_ref.get("decoration"):
+    # A layered-v2 design whose base is CSS has no template raster; the photograph is then
+    # cleaned only of what other owners draw (text, icons, panels).
+    no_template = bool(overlay_ref.get("omitted")) and jobs.is_v2(job)
+    if not overlay_ref.get("decoration") and not no_template:
         raise AssetInvalid(
             "CLEAN_PHOTO needs the decoration overlay to know what to repaint, but "
             "none has been produced."
         )
-    overlay = artifacts.get_bytes(job_id, overlay_ref["decoration"])
+    overlay = None if no_template else artifacts.get_bytes(job_id, overlay_ref["decoration"])
     scene = artifacts.get_json(job_id, job["artifacts"][Stage.EXTRACT_SCENE]["scene"])
 
     from PIL import Image
 
     with Image.open(io.BytesIO(concept)) as img:
         size = img.size
-    mask, edit_fraction = edit_mask.build_clean_photo_mask(size, overlay, scene)
+    disbelieved, mask_notes = None, {}
+    if jobs.is_v2(job) and overlay is not None:
+        # Do not repaint the photograph where the template invented artwork: the real
+        # photograph is under it, and repainting it is how a defective template used to
+        # damage the second layer as well.
+        tolerance = template_policy.for_job(job)
+        checked = template_check.compare(concept, overlay, scene, tolerance)
+        mask_notes["templateMajor"] = checked["major"]
+        if checked["major"]:
+            disbelieved = template_check.added_artwork_mask(
+                concept, overlay, scene, tolerance, size=size)
+            mask_notes["disbelievedRegions"] = len(checked["regions"])
+    mask, edit_fraction = edit_mask.build_clean_photo_mask(
+        size, overlay, scene, disbelieved=disbelieved)
     log.info("clean photo mask editFraction=%.3f", edit_fraction)
 
     prompt = prompts.render("clean-photo", width=canvas["width"], height=canvas["height"])
@@ -173,7 +241,7 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
     if not after_repair and not instruction:
         cache_id = stage_cache.key(
             Stage.CLEAN_PHOTO, concept=artifacts.sha256_hex(concept),
-            overlay=artifacts.sha256_hex(overlay),
+            overlay=artifacts.sha256_hex(overlay) if overlay is not None else "none",
             textBoxes=stage_cache.digest(
                 [(l["x"], l["y"], l["width"], l["height"]) for l in scene["textLayers"]]
             ),
@@ -207,7 +275,8 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
            operation_id=f"{job_id}:{Stage.CLEAN_PHOTO}:{attempt}{suffix}",
            notes={"editFraction": round(float(edit_fraction), 4),
                   "afterOverlayRepair": bool(after_repair),
-                  "overlaySha256": artifacts.sha256_hex(overlay)})
+                  "overlaySha256": artifacts.sha256_hex(overlay) if overlay is not None else None,
+                  **mask_notes})
     pointers = {
         "background": stored["key"],
         "sha256": stored["sha256"],
@@ -225,17 +294,18 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
 
 
 def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
-              transparent):
+              transparent, prompt=None, notes=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, stage)
 
     canvas = {"width": int(job["canvasWidth"]), "height": int(job["canvasHeight"])}
     concept = _concept_bytes(job_id, job)
 
-    prompt = prompts.render(
-        prompt_name, width=canvas["width"], height=canvas["height"],
-        components=_removal_block(job_id, job),
-    )
+    if prompt is None:
+        prompt = prompts.render(
+            prompt_name, width=canvas["width"], height=canvas["height"],
+            components=_removal_block(job_id, job),
+        )
     cache_id = stage_cache.key(
         stage, concept=artifacts.sha256_hex(concept),
         prompt=stage_cache.prompt_digest(prompt), model=conf.IMAGE_MODEL,
@@ -261,7 +331,8 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
     _trace(job_id, stage, attempt, f"provider-trace-{label}.json",
            prompt_name=prompt_name, prompt=prompt, concept=concept, mask=None,
-           result=result, stored=stored, operation_id=f"{job_id}:{stage}:{attempt}")
+           result=result, stored=stored, operation_id=f"{job_id}:{stage}:{attempt}",
+           notes=notes)
     pointers = {
         label: stored["key"],
         "sha256": stored["sha256"],

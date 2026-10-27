@@ -35,7 +35,7 @@ GROW_FRACTION = 0.0125
 PAD_FRACTION = 0.006
 
 
-def build_clean_photo_mask(size, overlay_bytes, scene):
+def build_clean_photo_mask(size, overlay_bytes, scene, disbelieved=None):
     """Return `(png_bytes, edit_fraction)` for a concept of `size` (w, h).
 
     The PNG follows the provider convention: alpha 0 marks pixels to repaint,
@@ -45,13 +45,25 @@ def build_clean_photo_mask(size, overlay_bytes, scene):
     from PIL import Image, ImageDraw, ImageFilter
 
     width, height = size
-    overlay, _ = validate_assets.load_rgba(overlay_bytes)
-    if overlay.size != size:
-        overlay = overlay.resize(size, Image.LANCZOS)
+    if overlay_bytes is None:
+        # No template raster (the design base is CSS): nothing is repainted for it.
+        artwork = Image.new("L", size, 0)
+    else:
+        overlay, _ = validate_assets.load_rgba(overlay_bytes)
+        if overlay.size != size:
+            overlay = overlay.resize(size, Image.LANCZOS)
+        artwork = overlay.getchannel("A").point(
+            lambda a: 255 if a >= ARTWORK_ALPHA else 0
+        )
+        if disbelieved is not None:
+            # Artwork the concept does not have is not ground to repaint: the photograph
+            # underneath it is the real one. `disbelieved` is 255 where the template was
+            # judged to have invented something (lib/template_check.py).
+            from PIL import ImageChops
 
-    artwork = overlay.getchannel("A").point(
-        lambda a: 255 if a >= ARTWORK_ALPHA else 0
-    )
+            if disbelieved.size != size:
+                disbelieved = disbelieved.resize(size, Image.NEAREST)
+            artwork = ImageChops.multiply(artwork, ImageChops.invert(disbelieved))
     # MaxFilter's size is the window width and must be odd: 13 px at 1024.
     grow = max(3, round(width * GROW_FRACTION) | 1)
     artwork = artwork.filter(ImageFilter.MaxFilter(grow))

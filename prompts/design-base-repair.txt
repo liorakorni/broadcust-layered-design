@@ -1,0 +1,7 @@
+
+CORRECTION. An earlier extraction of this same image was checked against the
+assembled design and found to differ from it. Extract the design base again from the
+attached image, following every rule above, and fix exactly this without changing what
+was already right:
+{defects}
+Do not add anything the attached image does not contain.

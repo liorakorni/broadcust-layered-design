@@ -1,0 +1,18 @@
+Extract only the structural design base from the attached image.
+Preserve existing graphic fills, colors, textures, shapes and structural ornaments in
+their original positions, proportions and overall footprint. Preserve intended alpha.
+Remove photographic content, all text, logos, icons and components explicitly
+assigned to independent layers in the supplied ownership plan.
+Remove dedicated CTA panels, contact circles and text cards; these will be rebuilt
+as independent editable layers.
+{windows}
+If the design base consists only of a gradient, return only that gradient.
+Do not add shapes, borders, contours, ornaments or new design features.
+Do not connect separate ornaments into a continuous frame or complete a border around
+the canvas.
+Continue only the surrounding structural design into areas exposed by removal.
+Keep the original canvas dimensions and coordinate system.
+
+OWNERSHIP PLAN (coordinates are pixels of the attached {image_width}x{image_height} image):
+{ownership}
+{tolerance}
