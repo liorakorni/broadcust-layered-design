@@ -77,7 +77,8 @@ def generate(prompt, width, height, *, transparent=False, operation_id=None,
         "background": "transparent" if transparent else "opaque",
     }
     # output_compression is deliberately never sent: it is invalid for PNG.
-    return _call(lambda c: c.images.generate(**params), operation_id, transparent)
+    return _call(lambda c: c.images.generate(**params), operation_id, transparent,
+                 request=_describe("images.generate", params, image_count=0))
 
 
 def edit(prompt, source_bytes, width, height, *, transparent=False,
@@ -101,12 +102,28 @@ def edit(prompt, source_bytes, width, height, *, transparent=False,
     }
     if mask is not None:
         params["mask"] = ("mask.png", mask, "image/png")
-    return _call(lambda c: c.images.edit(**params), operation_id, transparent)
+    return _call(lambda c: c.images.edit(**params), operation_id, transparent,
+                 request=_describe("images.edit", params, image_count=1,
+                                   mask=mask is not None))
 
 
-def _call(invoke, operation_id, transparent):
+def _describe(operation, params, *, image_count, mask=False):
+    """What was actually sent, minus the prompt and the bytes (see lib/provider_trace.py)."""
+    return {
+        "provider": "openai", "operation": operation, "model": params["model"],
+        "size": params["size"], "quality": params["quality"],
+        "background": params["background"], "outputFormat": params["output_format"],
+        "imageCount": image_count, "maskAttached": bool(mask),
+    }
+
+
+def _call(invoke, operation_id, transparent, request=None):
+    import hashlib
+    import time
+
     import openai
 
+    started = time.monotonic()
     try:
         response = invoke(_openai())
     except openai.APITimeoutError as exc:
@@ -144,11 +161,18 @@ def _call(invoke, operation_id, transparent):
         operation_id,
         request_id,
     )
+    raw = base64.b64decode(payload)
     return {
-        "bytes": base64.b64decode(payload),
+        "bytes": raw,
         "mimeType": "image/png",
         "requestId": request_id,
         "model": conf.IMAGE_MODEL,
+        # For lib/provider_trace.py. The adapter returns the provider's bytes as
+        # they came; the hash is here so a later step that changes them is visible.
+        "rawSha256": hashlib.sha256(raw).hexdigest(),
+        "rawBytes": len(raw),
+        "durationMs": int((time.monotonic() - started) * 1000),
+        "request": request or {},
     }
 
 

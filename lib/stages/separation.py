@@ -25,7 +25,8 @@ import logging
 
 import conf
 from lib import (
-    artifacts, edit_mask, jobs, prompts, stage_cache, telemetry, validate_assets,
+    artifacts, edit_mask, jobs, prompts, provider_trace,
+    stage_cache, telemetry, validate_assets,
 )
 from lib.errors import AssetInvalid, Stage
 from lib.providers import image
@@ -98,6 +99,11 @@ def repair_overlay(job_id, attempt, asset_id=None):
         job_id, Stage.DECORATION_OVERLAY, attempt, f"overlay-repair-{round_number}.png"
     )
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
+    _trace(job_id, Stage.DECORATION_OVERLAY, attempt, f"provider-trace-overlay-repair-{round_number}.json",
+           prompt_name="decoration-overlay+repair-overlay", prompt=prompt, concept=concept,
+           mask=None, result=result, stored=stored,
+           operation_id=f"{job_id}:overlay_repair:{round_number}",
+           notes={"defect": defect[:400]})
     # Repoints DECORATION_OVERLAY at the repaired bytes, so the re-validation
     # that follows reads the repair rather than the overlay it just rejected.
     jobs.record_artifacts(
@@ -195,6 +201,13 @@ def clean_photo(job_id, attempt, asset_id=None, after_repair=False, instruction=
         job_id, Stage.CLEAN_PHOTO, attempt, f"photo{suffix}.png"
     )
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
+    _trace(job_id, Stage.CLEAN_PHOTO, attempt, f"provider-trace-photo{suffix or ''}.json",
+           prompt_name="clean-photo", prompt=prompt, concept=concept, mask=mask,
+           result=result, stored=stored,
+           operation_id=f"{job_id}:{Stage.CLEAN_PHOTO}:{attempt}{suffix}",
+           notes={"editFraction": round(float(edit_fraction), 4),
+                  "afterOverlayRepair": bool(after_repair),
+                  "overlaySha256": artifacts.sha256_hex(overlay)})
     pointers = {
         "background": stored["key"],
         "sha256": stored["sha256"],
@@ -246,6 +259,9 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
 
     key = artifacts.artifact_key(job_id, stage, attempt, artifact_name)
     stored = artifacts.put_bytes(key, result["bytes"], "image/png")
+    _trace(job_id, stage, attempt, f"provider-trace-{label}.json",
+           prompt_name=prompt_name, prompt=prompt, concept=concept, mask=None,
+           result=result, stored=stored, operation_id=f"{job_id}:{stage}:{attempt}")
     pointers = {
         label: stored["key"],
         "sha256": stored["sha256"],
@@ -259,6 +275,23 @@ def _separate(job_id, attempt, *, stage, prompt_name, artifact_name, label,
     }
     stage_cache.remember(job_id, cache_id, {"pointers": pointers, "result": out})
     return out
+
+
+def _trace(job_id, stage, attempt, name, *, prompt_name, prompt, concept, mask, result,
+           stored, operation_id, notes=None):
+    """Write the restricted diagnostic record for this provider call (never raises).
+
+    The provider's bytes are stored exactly as received, so `processing` is empty:
+    nothing between the response and the artifact can have changed them. The first
+    code that does is validation's resample, which works on a copy.
+    """
+    trace = provider_trace.build(
+        stage=stage, operation_id=operation_id, prompt_name=prompt_name, prompt=prompt,
+        inputs=[("approvedConcept", concept)], mask=mask, result=result,
+        stored_sha256=stored["sha256"], stored_bytes=stored["bytes"],
+        processing=[], notes=notes,
+    )
+    provider_trace.record(job_id, stage, attempt, name, trace)
 
 
 def _removal_block(job_id, job):
