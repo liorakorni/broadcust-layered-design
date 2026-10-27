@@ -146,13 +146,19 @@ def job_exists(job_id):
 
 def create_job(job_id, owner_scope, request_hash, request_key, canvas,
                design_freedom=0, review_strictness=None, flow="legacy",
-               layout_policy=None, reuse_concept_from=None):
+               layout_policy=None, reuse_concept_from=None, template_flexibility=None,
+               pipeline_version=None):
     """Record the job as QUEUED before any execution starts.
 
     `layout_policy` is the direction policy resolved once at acceptance
     (lib/direction_policy.resolve_for_request). A job created without one - one
     accepted before it existed - keeps resolving its direction the way it always
     did; it is never reinterpreted.
+
+    `pipeline_version` and `template_flexibility` are likewise resolved once, here, and
+    stored: a job created without them (every job accepted before they existed) has no
+    pipelineVersion attribute and is read as layered-v1, and no templateTolerance, so it
+    is judged exactly as it always was. Nothing migrates it.
     """
     from lib import reference_policy, review_policy
 
@@ -207,12 +213,37 @@ def create_job(job_id, owner_scope, request_hash, request_key, canvas,
             **{f"repairs_{category}": 0 for category in REPAIR_CATEGORIES},
             "flow": flow,
             **({"layoutPolicy": layout_policy} if layout_policy else {}),
+            **({"pipelineVersion": pipeline_version} if pipeline_version else {}),
+            **({"templateTolerance": _tolerance(template_flexibility)}
+               if template_flexibility is not None else {}),
+            **(_budget_attributes() if pipeline_version else {}),
             **({"reuseConceptFrom": {"jobId": reuse_concept_from}} if reuse_concept_from else {}),
             "createdAt": _now(),
             "updatedAt": _now(),
             "expiresAt": _ttl(),
         }
     )
+
+
+def _tolerance(flexibility):
+    from lib import template_policy
+
+    return template_policy.resolve(flexibility)
+
+
+def _budget_attributes():
+    from lib import repair_budget
+
+    return repair_budget.initial_attributes()
+
+
+def pipeline_version(job):
+    """The execution path a job was accepted for. No attribute means layered-v1."""
+    return (job or {}).get("pipelineVersion") or conf.LEGACY_PIPELINE_VERSION
+
+
+def is_v2(job):
+    return pipeline_version(job) != conf.LEGACY_PIPELINE_VERSION
 
 
 def attach_execution(job_id, execution_arn):

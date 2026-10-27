@@ -155,6 +155,11 @@ def run_layered_design(payload, caller_context):
             layout_policy=direction_policy.resolve_for_request(
                 request.model_dump(mode="json")),
             reuse_concept_from=request.reuseConceptFromJobId,
+            # Resolved once, here, and persisted: generation, review and repair all
+            # read the same tolerance, and a later change to a profile cannot move
+            # the bar for a job already accepted.
+            template_flexibility=request.templateFlexibility,
+            pipeline_version=conf.PIPELINE_VERSION,
         )
 
     _ensure_execution(job_id, request.designFlow, reuse=bool(request.reuseConceptFromJobId))

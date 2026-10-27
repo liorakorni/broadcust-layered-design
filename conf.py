@@ -95,6 +95,15 @@ MAX_OVERLAY_REPAIRS = 2
 #: repository: turn it off and no shape is ever added or planned.
 CODE_SHAPES_ENABLED = os.environ.get("CODE_SHAPES_ENABLED", "true").lower() == "true"
 
+#: The execution path a NEW request takes. "layered-v1" is the path every job accepted
+#: before the Design Base update took (visual template validation before the first HTML,
+#: an overlay repair that always rebuilds the photograph); it is not migrated and a job
+#: that carries no pipelineVersion is treated as v1. "layered-v2" reaches the first HTML
+#: on technical checks alone, falls back to CSS when the template is unusable, and spends
+#: one shared template-repair budget after the first draft exists (docs/CONTRACTS.md).
+LEGACY_PIPELINE_VERSION = "layered-v1"
+PIPELINE_VERSION = os.environ.get("PIPELINE_VERSION", "layered-v2")
+
 #: Phase B: the layout-first flow. Off unless explicitly enabled for the deployment.
 LAYOUT_FIRST_ENABLED = os.environ.get("LAYOUT_FIRST_ENABLED", "false").lower() == "true"
 

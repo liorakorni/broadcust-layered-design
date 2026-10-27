@@ -23,7 +23,7 @@ from pydantic import (
 )
 
 import conf
-from lib import review_policy
+from lib import review_policy, template_policy
 from lib.errors import InvalidRequest, InvalidScene
 
 HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -212,6 +212,16 @@ class StartRequest(Strict):
     # nothing about the composition can change. The brief should be the earlier
     # job's, so the copy matches the concept.
     reuseConceptFromJobId: Optional[str] = None
+    # How much APPEARANCE variation the structural template (Design Base) may show
+    # relative to the approved concept: 0 strict .. 100 broad (lib/template_policy.py).
+    # Separate from designFreedom, which governs the concept. Absent -> 20; an explicit
+    # null, a float, a string or a bool is rejected rather than defaulted.
+    templateFlexibility: int = template_policy.DEFAULT_FLEXIBILITY
+
+    @field_validator("templateFlexibility", mode="before")
+    @classmethod
+    def _template_flexibility(cls, v):
+        return template_policy.validate(v)
 
     @field_validator("reuseConceptFromJobId")
     @classmethod
@@ -313,6 +323,10 @@ def canonical_request_hash(request: "StartRequest") -> str:
         body.pop("reviewStrictness")
     if body.get("designFlow") == "legacy":
         body.pop("designFlow")
+    # An omitted templateFlexibility and an explicit default mean the same thing, and a
+    # request accepted before the field existed must keep hashing the way it did.
+    if body.get("templateFlexibility") == template_policy.DEFAULT_FLEXIBILITY:
+        body.pop("templateFlexibility")
     # Same reasoning for the direction fields: "auto" and "adapt-to-locale" are
     # what every request accepted before they existed meant, so a replay of one
     # must still hash to the same value.

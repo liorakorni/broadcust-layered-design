@@ -1,0 +1,759 @@
+{
+ "canvas": {
+  "height": 1080,
+  "width": 1080
+ },
+ "textLayers": [
+  {
+   "color": "#FFFFFF",
+   "contentKey": "business.name",
+   "fontFamily": "Arial",
+   "fontSize": 43,
+   "height": 49,
+   "id": "text-business",
+   "role": "businessName",
+   "text": "FIT HOME",
+   "type": "text",
+   "width": 213,
+   "x": 665,
+   "y": 124,
+   "zIndex": 20
+  },
+  {
+   "color": "#FFFFFF",
+   "contentKey": "title.primary",
+   "fontFamily": "Heebo",
+   "fontSize": 113,
+   "height": 123,
+   "id": "text-title-primary",
+   "role": "title",
+   "text": "אימון אישי",
+   "type": "text",
+   "width": 461,
+   "x": 571,
+   "y": 193,
+   "zIndex": 20
+  },
+  {
+   "color": "#FFE329",
+   "contentKey": "title.secondary",
+   "fontFamily": "Heebo",
+   "fontSize": 101,
+   "height": 111,
+   "id": "text-title-secondary",
+   "role": "subtitle",
+   "text": "אצלכם בבית",
+   "type": "text",
+   "width": 466,
+   "x": 568,
+   "y": 308,
+   "zIndex": 20
+  },
+  {
+   "color": "#FFFFFF",
+   "contentKey": "body.primary",
+   "fontFamily": "Heebo",
+   "fontSize": 36,
+   "height": 85,
+   "id": "text-body-primary",
+   "role": "informationItem",
+   "text": "אימוני כושר בהתאמה אישית לרמה, למטרות ולשגרה שלכם.",
+   "type": "text",
+   "width": 430,
+   "x": 604,
+   "y": 458,
+   "zIndex": 20
+  },
+  {
+   "color": "#FFFFFF",
+   "contentKey": "body.secondary",
+   "fontFamily": "Heebo",
+   "fontSize": 36,
+   "height": 89,
+   "id": "text-body-secondary",
+   "role": "informationItem",
+   "text": "ליווי אישי, טכניקה נכונה והתמדה לאורך הדרך.",
+   "type": "text",
+   "width": 372,
+   "x": 662,
+   "y": 575,
+   "zIndex": 20
+  },
+  {
+   "color": "#050500",
+   "contentKey": "cta.primary",
+   "fontFamily": "Heebo",
+   "fontSize": 34,
+   "height": 42,
+   "id": "text-cta",
+   "role": "cta",
+   "text": "לתיאום אימון היכרות",
+   "type": "text",
+   "width": 282,
+   "x": 731,
+   "y": 768,
+   "zIndex": 20
+  },
+  {
+   "color": "#FFFFFF",
+   "contentKey": "contact.phone",
+   "fontFamily": "Arial",
+   "fontSize": 30,
+   "height": 36,
+   "id": "text-phone",
+   "role": "userInformation",
+   "text": "050-1234567",
+   "type": "text",
+   "width": 181,
+   "x": 788,
+   "y": 853,
+   "zIndex": 20
+  },
+  {
+   "color": "#FFFFFF",
+   "contentKey": "contact.email",
+   "fontFamily": "Arial",
+   "fontSize": 30,
+   "height": 37,
+   "id": "text-email",
+   "role": "userInformation",
+   "text": "info@fithome.example",
+   "type": "text",
+   "width": 291,
+   "x": 678,
+   "y": 902,
+   "zIndex": 20
+  }
+ ],
+ "shapeLayers": [
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#EBCA25",
+   "effect": "effect-business-rule",
+   "height": 6,
+   "id": "business-rule",
+   "kind": "panel",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 130,
+   "x": 893,
+   "y": 142,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-cta",
+   "height": 71,
+   "id": "cta-panel",
+   "kind": "panel",
+   "opacity": 1.0,
+   "radius": 36,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 326,
+   "x": 709,
+   "y": 753,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-phone-circle",
+   "height": 47,
+   "id": "phone-circle",
+   "kind": "circle",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 47,
+   "x": 985,
+   "y": 844,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-email-circle",
+   "height": 47,
+   "id": "email-circle",
+   "kind": "circle",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 47,
+   "x": 985,
+   "y": 897,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": "#FFE329",
+   "borderWidth": 1.3,
+   "color": null,
+   "effect": "effect-chevron-1",
+   "height": 33,
+   "id": "chevron-1",
+   "kind": "chevron",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 45,
+   "stops": [],
+   "type": "shape",
+   "width": 55,
+   "x": 48,
+   "y": 55,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": "#FFE329",
+   "borderWidth": 8.0,
+   "color": null,
+   "effect": "effect-chevron-2",
+   "height": 33,
+   "id": "chevron-2",
+   "kind": "chevron",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 45,
+   "stops": [],
+   "type": "shape",
+   "width": 55,
+   "x": 48,
+   "y": 99,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": "#FFE329",
+   "borderWidth": 1.3,
+   "color": null,
+   "effect": "effect-chevron-3",
+   "height": 33,
+   "id": "chevron-3",
+   "kind": "chevron",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 45,
+   "stops": [],
+   "type": "shape",
+   "width": 55,
+   "x": 48,
+   "y": 143,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": "#FFE329",
+   "borderWidth": 8.0,
+   "color": null,
+   "effect": "effect-chevron-4",
+   "height": 33,
+   "id": "chevron-4",
+   "kind": "chevron",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 45,
+   "stops": [],
+   "type": "shape",
+   "width": 55,
+   "x": 48,
+   "y": 187,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": "#FFE329",
+   "borderWidth": 1.3,
+   "color": null,
+   "effect": "effect-chevron-5",
+   "height": 33,
+   "id": "chevron-5",
+   "kind": "chevron",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 45,
+   "stops": [],
+   "type": "shape",
+   "width": 55,
+   "x": 48,
+   "y": 231,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-dot-1",
+   "height": 15,
+   "id": "dot-1",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 14,
+   "x": 250,
+   "y": 915,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-dot-2",
+   "height": 15,
+   "id": "dot-2",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 14,
+   "x": 290,
+   "y": 915,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-dot-3",
+   "height": 15,
+   "id": "dot-3",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 14,
+   "x": 250,
+   "y": 949,
+   "zIndex": 5
+  },
+  {
+   "angle": 0,
+   "borderColor": null,
+   "borderWidth": 0.0,
+   "color": "#FFE329",
+   "effect": "effect-dot-4",
+   "height": 15,
+   "id": "dot-4",
+   "kind": "dot",
+   "opacity": 1.0,
+   "radius": 0,
+   "rotation": 0,
+   "stops": [],
+   "type": "shape",
+   "width": 14,
+   "x": 290,
+   "y": 949,
+   "zIndex": 5
+  }
+ ],
+ "imageLayers": [
+  {
+   "assetId": null,
+   "height": 1080,
+   "id": "photo-background",
+   "objectFit": "cover",
+   "objectPosition": null,
+   "radius": null,
+   "type": "background",
+   "width": 1080,
+   "x": 0,
+   "y": 0,
+   "zIndex": 0
+  },
+  {
+   "assetId": null,
+   "height": 1080,
+   "id": "graphic-overlay",
+   "objectFit": "contain",
+   "objectPosition": null,
+   "radius": null,
+   "type": "decoration",
+   "width": 1080,
+   "x": 0,
+   "y": 0,
+   "zIndex": 1
+  },
+  {
+   "assetId": "icon-phone",
+   "height": 28,
+   "id": "phone-icon",
+   "objectFit": "contain",
+   "objectPosition": null,
+   "radius": null,
+   "type": "image",
+   "width": 27,
+   "x": 996,
+   "y": 854,
+   "zIndex": 15
+  },
+  {
+   "assetId": "icon-email",
+   "height": 21,
+   "id": "email-icon",
+   "objectFit": "contain",
+   "objectPosition": null,
+   "radius": null,
+   "type": "image",
+   "width": 28,
+   "x": 995,
+   "y": 909,
+   "zIndex": 15
+  }
+ ],
+ "effects": [
+  {
+   "id": "effect-photo-darkening",
+   "kind": "readabilityGradient",
+   "note": "Broad black darkening across the right side of the living-room photograph, increasingly opaque toward the right edge behind the headline, body copy and contacts. Preserve the faint furniture detail and the transition beside the subject.",
+   "owner": "photo"
+  },
+  {
+   "id": "effect-business-rule",
+   "kind": "panel",
+   "note": "Thin yellow horizontal rule to the right of FIT HOME.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-cta",
+   "kind": "ctaBackground",
+   "note": "Yellow pill-shaped CTA background.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-phone-circle",
+   "kind": "badge",
+   "note": "Yellow circular backing for the black phone pictogram.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-email-circle",
+   "kind": "badge",
+   "note": "Yellow circular backing for the black envelope pictogram.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-chevron-1",
+   "kind": "chevrons",
+   "note": "First downward chevron, thin yellow outline.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-chevron-2",
+   "kind": "chevrons",
+   "note": "Second downward chevron, thick yellow stroke.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-chevron-3",
+   "kind": "chevrons",
+   "note": "Third downward chevron, thin yellow outline.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-chevron-4",
+   "kind": "chevrons",
+   "note": "Fourth downward chevron, thick yellow stroke.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-chevron-5",
+   "kind": "chevrons",
+   "note": "Fifth downward chevron, thin yellow outline.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-1",
+   "kind": "dots",
+   "note": "Upper-left dot of the four-dot motif.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-2",
+   "kind": "dots",
+   "note": "Upper-right dot of the four-dot motif.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-3",
+   "kind": "dots",
+   "note": "Lower-left dot of the four-dot motif.",
+   "owner": "layout"
+  },
+  {
+   "id": "effect-dot-4",
+   "kind": "dots",
+   "note": "Lower-right dot of the four-dot motif.",
+   "owner": "layout"
+  }
+ ],
+ "components": [
+  {
+   "id": "component-photo",
+   "kind": "photo",
+   "layerId": "photo-background",
+   "note": "Full-canvas photograph of a man in black workout clothing performing a one-arm dumbbell row with his other hand and knee supported on a black bench in a living room.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-decoration",
+   "kind": "retainedRaster",
+   "layerId": "graphic-overlay",
+   "note": "Retain the irregular yellow torn-wave strokes along the upper-right and lower-left edges, including their small irregular fragments. Retain the opaque black corner fields outside those contours: above the upper-right wave and below the lower wave. These uneven silhouettes are not rectangular panels. All text, contact icons, chevrons, dots, rule and CTA backing are separated.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-business",
+   "kind": "editableText",
+   "layerId": "text-business",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-title-primary",
+   "kind": "editableText",
+   "layerId": "text-title-primary",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-title-secondary",
+   "kind": "editableText",
+   "layerId": "text-title-secondary",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-body-primary",
+   "kind": "editableText",
+   "layerId": "text-body-primary",
+   "note": "Two right-aligned lines.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-body-secondary",
+   "kind": "editableText",
+   "layerId": "text-body-secondary",
+   "note": "Two right-aligned lines.",
+   "pairsWith": null
+  },
+  {
+   "id": "component-cta-text",
+   "kind": "editableText",
+   "layerId": "text-cta",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-phone-text",
+   "kind": "editableText",
+   "layerId": "text-phone",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-email-text",
+   "kind": "editableText",
+   "layerId": "text-email",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-business-rule",
+   "kind": "editableShape",
+   "layerId": "business-rule",
+   "note": null,
+   "pairsWith": "text-business"
+  },
+  {
+   "id": "component-cta-panel",
+   "kind": "editableShape",
+   "layerId": "cta-panel",
+   "note": null,
+   "pairsWith": "text-cta"
+  },
+  {
+   "id": "component-phone-circle",
+   "kind": "editableShape",
+   "layerId": "phone-circle",
+   "note": null,
+   "pairsWith": "text-phone"
+  },
+  {
+   "id": "component-email-circle",
+   "kind": "editableShape",
+   "layerId": "email-circle",
+   "note": null,
+   "pairsWith": "text-email"
+  },
+  {
+   "id": "component-phone-icon",
+   "kind": "rasterIcon",
+   "layerId": "phone-icon",
+   "note": "Black telephone handset.",
+   "pairsWith": "text-phone"
+  },
+  {
+   "id": "component-email-icon",
+   "kind": "rasterIcon",
+   "layerId": "email-icon",
+   "note": "Black envelope pictogram.",
+   "pairsWith": "text-email"
+  },
+  {
+   "id": "component-chevron-1",
+   "kind": "editableShape",
+   "layerId": "chevron-1",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-chevron-2",
+   "kind": "editableShape",
+   "layerId": "chevron-2",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-chevron-3",
+   "kind": "editableShape",
+   "layerId": "chevron-3",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-chevron-4",
+   "kind": "editableShape",
+   "layerId": "chevron-4",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-chevron-5",
+   "kind": "editableShape",
+   "layerId": "chevron-5",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-1",
+   "kind": "editableShape",
+   "layerId": "dot-1",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-2",
+   "kind": "editableShape",
+   "layerId": "dot-2",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-3",
+   "kind": "editableShape",
+   "layerId": "dot-3",
+   "note": null,
+   "pairsWith": null
+  },
+  {
+   "id": "component-dot-4",
+   "kind": "editableShape",
+   "layerId": "dot-4",
+   "note": null,
+   "pairsWith": null
+  }
+ ],
+ "overlaySamples": [
+  {
+   "height": 78,
+   "kind": "transparent",
+   "width": 92,
+   "x": 354,
+   "y": 89
+  },
+  {
+   "height": 98,
+   "kind": "transparent",
+   "width": 117,
+   "x": 170,
+   "y": 274
+  },
+  {
+   "height": 135,
+   "kind": "transparent",
+   "width": 54,
+   "x": 450,
+   "y": 463
+  },
+  {
+   "height": 93,
+   "kind": "transparent",
+   "width": 64,
+   "x": 111,
+   "y": 703
+  },
+  {
+   "height": 43,
+   "kind": "transparent",
+   "width": 128,
+   "x": 372,
+   "y": 807
+  },
+  {
+   "height": 109,
+   "kind": "transparent",
+   "width": 20,
+   "x": 20,
+   "y": 290
+  },
+  {
+   "height": 42,
+   "kind": "opaque",
+   "width": 198,
+   "x": 18,
+   "y": 1013
+  },
+  {
+   "height": 28,
+   "kind": "opaque",
+   "width": 156,
+   "x": 285,
+   "y": 1035
+  },
+  {
+   "height": 36,
+   "kind": "opaque",
+   "width": 85,
+   "x": 960,
+   "y": 15
+  }
+ ]
+}
