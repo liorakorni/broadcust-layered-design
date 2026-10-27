@@ -364,3 +364,49 @@ Optional request field `reuseConceptFromJobId` (owner-scoped) rebuilds a design 
 the approved concept of an earlier job of the same owner instead of generating one.
 It is for re-running reconstruction after a pipeline fix; it is not exposed to the
 Bedrock agent.
+
+
+## 8. Layered-v2: layer plan, Design Base, budgets, milestones (additive)
+
+Applies to jobs with `pipelineVersion: "layered-v2"` (set at acceptance from
+`conf.PIPELINE_VERSION`, stored with `templateTolerance`). A job without the attribute is
+`layered-v1`, keeps its path and its result shape, and is never migrated.
+
+**Layer plan** (`scene.layerPlan`, `layer-plan-1`, inside the existing scene schema): every
+element has a stable id, one of six categories (background photograph, structural design
+template, movable decorations, editable text, editable text backgrounds, generic icons),
+one owner and renderer, geometry in canvas pixels, z-index, dependencies and an optional
+group. The template raster excludes text, logos, icons, text cards, CTA backgrounds and
+contact circles; the plan records both coordinate spaces (concept and canvas). A correction
+bumps `revision`, lists what it touched and which dependents it invalidates; it never
+regenerates the concept. The representation (`overlay` / `full` / `css-only`) is persisted
+before extraction; a gradient-only base drawn fully in CSS makes no raster call.
+
+**Background Image vs Design Base.** The background is photographic content only. The
+design base is structural graphics only, extracted with `prompts/design-base.txt` and the
+actual approved concept bytes, with boxes quoted in that image's pixel space. A design-base
+repair does not rebuild the photograph (`rebuildPhoto: false`); a photo repair needs its own
+documented grant (`repair_budget.grant_photo_repair`).
+
+**Repair budgets** (`repairBudget` on the job, atomic counters): at most one template-image
+repair (after the first HTML) and two DOM/CSS rounds across content, typography and layout;
+nothing resets or nests them; transient provider retries are counted separately.
+
+**Results.** All result fields come from the one delivered candidate: `fallbacksUsed` is
+read from that candidate's own layer plan; validation warnings are rebuilt from its own
+validation record, not copied from a later rejected attempt.
+
+**Milestone** `FIRST_HTML_RENDERED`: job attributes `firstHtmlRenderedAt`,
+`timeToFirstHtmlMs`, `firstCandidateId` (`attempt-N`), `firstAttempt`, `firstHtmlKey`,
+`firstHtmlHash`, `firstPreviewKey`, `firstHtmlRecovered`. Written by RENDER after the
+render is stored, with `attribute_not_exists(firstHtmlRenderedAt)`; recovered by REVIEW
+if interrupted. `RENDER` pointers carry `renderedAt`, which is how the final timing refers to
+the delivered candidate's own render.
+
+**Retention and links.** Draft objects are ordinary temporary artifacts: they expire after
+30 days with the job (a failed job keeps nothing), and only the *delivered* candidate's
+objects are retagged `retained`. The first HTML is therefore not guaranteed to outlive the
+job unless it was the delivered candidate. Draft links are signed at poll time, expire in at
+most `artifacts.LINK_SECONDS` (15 minutes), are never stored in the job or in `result.json`
+and never logged; no object is made public. The IAM role that serves status needs
+`s3:GetObject` on the artifact prefix, which it already has.

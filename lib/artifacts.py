@@ -72,6 +72,30 @@ def artifact_key(job_id, stage, attempt, name):
     return f"{job_prefix(job_id)}{stage}/{attempt}/{name}"
 
 
+#: How long a link to a draft's artifacts stays valid. Links are made when a caller asks
+#: for the status, are never stored or logged, and a caller that needs one later asks again.
+LINK_SECONDS = 900
+
+
+def link(job_id, key, expires=LINK_SECONDS):
+    """A short-lived read link for one of THIS job's artifacts.
+
+    Nothing about the bucket is made public: the link is signed, expires after `expires`
+    seconds (at most LINK_SECONDS) and is never persisted, so no expiring URL can end up
+    embedded in a stored result. Returns None when a link cannot be made.
+    """
+    key = job_key(job_id, key)
+    try:
+        return _client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": conf.ARTIFACT_BUCKET, "Key": key},
+            ExpiresIn=min(int(expires), LINK_SECONDS),
+        )
+    except Exception:  # noqa: BLE001 - a draft is still useful without its links
+        log.warning("could not create an artifact link")
+        return None
+
+
 def job_key(job_id, key):
     """Return `key` only if it belongs to this job, else raise.
 

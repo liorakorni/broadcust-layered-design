@@ -345,3 +345,36 @@ def test_the_owner_scope_attribute_name_is_configurable(monkeypatch, start_paylo
     ok = agent_start(start_payload, session={"tenant": "tenant-a"})
     assert body(ok)["success"] is True
     assert body(agent_start(start_payload, session=dict(TENANT_A)))["success"] is False
+
+
+def test_a_compact_status_keeps_the_draft_as_references_never_the_html():
+    response = {"success": True, "jobId": "j", "status": "RUNNING", "draft": {
+        "state": "draft", "candidateId": "attempt-1", "attempt": 1, "final": False,
+        "publishReady": False, "needsReview": True, "html": "<div>" * 5000,
+        "htmlUrl": "https://example.invalid/x?sig=1", "previewUrl": "https://example.invalid/y"}}
+    compact = bedrock.compact_result(response)
+
+    assert compact["draft"]["candidateId"] == "attempt-1" and compact["draft"]["final"] is False
+    assert not {"html", "htmlUrl", "previewUrl"} & set(compact["draft"])
+    assert "html" in response["draft"]                      # the argument is not mutated
+
+
+def test_a_compact_result_keeps_the_v2_fields_and_a_null_score_with_its_reason():
+    response = {"status": "SUCCEEDED", "result": {
+        "html": "<x>", "pipelineVersion": "layered-v2", "templateFlexibility": 20,
+        "fallbacksUsed": [], "qualityScore": None, "qualityReason": "Not assessed.",
+        "qualityBreakdown": {"big": 1}}}
+    compact = bedrock.compact_result(response)["result"]
+
+    assert compact["pipelineVersion"] == "layered-v2" and compact["fallbacksUsed"] == []
+    assert compact["qualityScore"] is None and compact["qualityReason"] == "Not assessed."
+    assert "html" not in compact and "qualityBreakdown" not in compact
+
+
+def test_the_agent_passes_template_flexibility_and_pipeline_version_through_requestjson(
+        start_payload, monkeypatch):
+    job_id = body(agent_start({**start_payload, "templateFlexibility": 40}))["jobId"]
+    job = jobs.get_job_unscoped(job_id)
+
+    assert job["templateTolerance"]["value"] == 40
+    assert job["pipelineVersion"] == "layered-v2"      # new requests reach the updated path

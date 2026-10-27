@@ -7,7 +7,7 @@
         "requestJson": {
           "type": "string",
           "required": true,
-          "description": "Serialized JSON start request: requestId, brief, referenceImageUrl and optional canvas and assets fields."
+          "description": "Serialized JSON start request: requestId, brief, referenceImageUrl and optional canvas, assets, designFreedom and templateFlexibility (integer 0-100, default 20: how much the generated design base may differ from the approved concept) fields."
         }
       }
     },

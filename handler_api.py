@@ -19,7 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import conf
-from lib import artifacts, bedrock, direction_policy, jobs
+from lib import artifacts, bedrock, direction_policy, jobs, milestones
 from lib.errors import (
     Code,
     InvalidRequest,
@@ -294,6 +294,11 @@ def get_layered_design_status(job_id, caller_context):
             "message": "The job failed.",
             "retryable": False,
         }
+        # A job that failed after rendering its first HTML still has that draft.
+        draft = milestones.draft(item)
+        if draft:
+            response["draft"] = draft
+            response["milestones"] = milestones.first_html_summary(item)
         return response
 
     if status in Status.DELIVERED:
@@ -324,4 +329,10 @@ def get_layered_design_status(job_id, caller_context):
 
     # Report the real stage rather than a fabricated percentage (SPEC 2.4).
     response["stage"] = item.get("stage")
+    # The first rendered HTML, once there is one: a draft, with its review state. It is
+    # never the final result and never publish-ready.
+    draft = milestones.draft(item)
+    if draft:
+        response["draft"] = draft
+        response["milestones"] = milestones.first_html_summary(item)
     return response

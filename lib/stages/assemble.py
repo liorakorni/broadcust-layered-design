@@ -13,7 +13,8 @@ from __future__ import annotations
 import copy
 
 from lib import (
-    alignment, artifacts, assemble_html, geometry, jobs, layer_plan, media, render as renderer,
+    alignment, artifacts, assemble_html, geometry, jobs, layer_plan, media, milestones,
+    render as renderer,
     typography_check,
 )
 from lib.errors import RenderFailed, Stage
@@ -264,6 +265,10 @@ def render(job_id, attempt, asset_id=None):
         "feed": feed["key"],
         "problems": list(checks["problems"]) + measured,
         "checksPerformed": checks.get("performed", []),
+        # When THIS candidate was rendered, so the delivered one can report its own time.
+        "renderedAt": jobs._now(),
     }
     jobs.record_artifacts(job_id, Stage.RENDER, attempt, out)
+    # The first HTML that exists and has been rendered is a durable milestone (a draft).
+    milestones.record_first_html(job_id, attempt, rendered_at=out["renderedAt"])
     return out

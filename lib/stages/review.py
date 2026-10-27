@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import conf
 from lib import (
-    artifacts, content_check, design_state, repair_budget, repair_progress, telemetry, jobs, media,
-    prompts,
+    artifacts, content_check, design_state, milestones, repair_budget, result_fields, repair_progress, telemetry,
+    jobs, media, prompts,
     repair_routing, review_policy, scene_patch, schemas, visual_compare,
 )
 from lib import candidates as candidates_module
@@ -136,6 +136,9 @@ def _render_checks(rendered):
 def run(job_id, attempt, asset_id=None):
     job = jobs.get_job_unscoped(job_id)
     jobs.set_stage(job_id, Stage.REVIEW)
+    # A milestone whose write was interrupted after the render is written now, from the
+    # artifacts that exist (marked recovered). A no-op when it is already there.
+    milestones.ensure_first_html(job_id)
 
     produced = job["artifacts"]
     copy_items = artifacts.get_json(job_id, produced[Stage.PREPARE_COPY]["copy"])["items"]
@@ -1004,6 +1007,14 @@ def _publish(job_id, job, attempt, selected, candidates, produced, review, appro
             "The delivered HTML or preview is not the version that was reviewed."
         )
 
+    # What a layered-v2 job adds to the result, all from this one candidate. Computed before
+    # anything is published so that a layer-contract violation or a critical finding is
+    # reflected in `publishReady` and `needsReview`; never raises.
+    v2_fields, v2_extra = {}, []
+    if result_fields.applies(job):
+        v2_fields, outcome, v2_extra = result_fields.build(
+            job_id, job, produced, scene, review, selected, outcome, produced[Stage.RENDER])
+
     # The preview is the native render published to a durable URL. It joins the
     # manifest so its hash is covered too.
     preview = media.publish(native, job_id=job_id, asset_id="preview")
@@ -1034,6 +1045,7 @@ def _publish(job_id, job, attempt, selected, candidates, produced, review, appro
     if outcome.get("findings") is not None:
         warnings = list(outcome["findings"]) + [
             w for w in warnings if w.get("stage") != Stage.REVIEW]
+    warnings = warnings + v2_extra
     selection = {
         "attempt": approved_concept["attempt"],
         "key": approved_concept["key"],
@@ -1127,6 +1139,7 @@ def _publish(job_id, job, attempt, selected, candidates, produced, review, appro
     }
     if outcome.get("diagnostics"):
         result["diagnostics"] = outcome["diagnostics"]
+    result.update(v2_fields)
 
     stored = artifacts.put_json(result_key, result)
 
@@ -1262,7 +1275,8 @@ def _require_downstream_complete(job, produced, review, approved_concept):
 
 def _warnings(concept_review, review, job=None):
     """Every non-blocking finding, tagged with the stage that raised it."""
-    found = [dict(w) for w in jobs.stage_warnings(job or {})]
+    keep = result_fields.stage_warning_filter(job or {})
+    found = [dict(w) for w in jobs.stage_warnings(job or {}) if keep(w)]
     for source, issues in (
         (Stage.REVIEW_CONCEPT, concept_review.get("warnings", [])),
         (Stage.REVIEW, review.get("warnings", [])),

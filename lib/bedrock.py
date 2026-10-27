@@ -99,6 +99,26 @@ _COMPACT_FIELDS = (
     "publishReady",
     "stopReason",
     "selectedAttempt",
+    # Layered-v2 additions: small, and what a caller reading only the compact result
+    # needs to tell what pipeline produced it and what was substituted.
+    "pipelineVersion",
+    "templateFlexibility",
+    "fallbacksUsed",
+    "rubricVersion",
+    "milestones",
+    "timing",
+    "qualityScore",
+    "qualityReason",
+)
+
+#: Kept when present even if null: "no score, and here is why" differs from "no field".
+_COMPACT_NULLABLE = ("qualityScore", "qualityReason")
+
+#: What a draft keeps in a compact status. The HTML and the links are left out: the agent
+#: response is small, and a draft is for the application that polls directly.
+_COMPACT_DRAFT_FIELDS = (
+    "state", "candidateId", "attempt", "renderedAt", "timeToFirstHtmlMs", "reviewState",
+    "final", "publishReady", "needsReview", "htmlHash",
 )
 
 
@@ -110,14 +130,23 @@ def compact_result(response):
     """
     result = response.get("result")
     if not isinstance(result, dict):
-        return response
-    compact = {k: v for k, v in response.items() if k != "result"}
+        return _compact_draft(response)
+    compact = _compact_draft({k: v for k, v in response.items() if k != "result"})
     # `is not None`, not truthiness: designFreedom 0 is the default and a real
     # value that a falsy filter would silently drop.
     compact["result"] = {
-        k: result[k] for k in _COMPACT_FIELDS if k in result and result[k] is not None
+        k: result[k] for k in _COMPACT_FIELDS
+        if k in result and (result[k] is not None or k in _COMPACT_NULLABLE)
     }
     return compact
+
+
+def _compact_draft(response):
+    """The response with its draft reduced to references (a new dict when it has one)."""
+    draft = response.get("draft")
+    if not isinstance(draft, dict):
+        return response
+    return {**response, "draft": {k: draft[k] for k in _COMPACT_DRAFT_FIELDS if k in draft}}
 
 
 def envelope(event, result):

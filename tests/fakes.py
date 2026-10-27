@@ -79,8 +79,9 @@ class FakeTable:
                 )
 
         if ConditionExpression:
-            if ConditionExpression == "attribute_not_exists(executionArn)":
-                if item.get("executionArn"):
+            guard = re.match(r"^attribute_not_exists\((\w+)\)$", ConditionExpression)
+            if guard:
+                if item.get(guard.group(1)):
                     raise _conditional_failure("UpdateItem")
             else:
                 m = re.match(r"^(\w+) < :limit$", ConditionExpression)
@@ -175,6 +176,10 @@ class FakeS3:
 
     def deny(self, key):
         self.denied.add(key)
+
+    def generate_presigned_url(self, operation, Params, ExpiresIn):
+        assert operation == "get_object" and Params["Key"] in self.objects
+        return f"https://fake-s3.example/{Params['Key']}?expires={ExpiresIn}&sig=fake"
 
     def put_object(
         self, Bucket, Key, Body, ContentType=None, IfNoneMatch=None, Tagging=None

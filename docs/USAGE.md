@@ -62,6 +62,7 @@ from the shape of the request.
 | `brand.fontFamilies` | no | Must be installed in the renderer — currently `Heebo` and `Arial`. An unlisted font is rejected at PREFLIGHT rather than silently substituted. |
 | `suppliedAssets` | no | Up to 10 images you provide (`logo`, `photo`, `product`, `portrait`). These are used as-is and never regenerated. |
 | `designFreedom` | no | Integer 0-100: how far the design may depart from the reference. Default `0` (strictest). See below. |
+| `templateFlexibility` | no | Integer 0-100, default `20`: how much the generated design base (the structural artwork under the editable layers) may differ from the approved concept. Independent of `designFreedom`. See below. |
 | `reviewStrictness` | no | How strictly differences are judged. Default and only supported value: `"balanced"`. Independent of `designFreedom`. See below. |
 | `layoutDirection` | no | `"auto"` (default), `"rtl"` or `"ltr"`: where the columns sit. See below. |
 | `textDirection` | no | `"auto"` (default), `"rtl"` or `"ltr"`: how the writing runs. |
@@ -112,6 +113,55 @@ the concept prompt, the concept review and its repairs.
 
 The effective value and `policyVersion` come back in the result and in `qa`, with
 the concept review's mode and documented exceptions.
+
+### `templateFlexibility`
+
+`designFreedom` governs the concept; `templateFlexibility` governs only how closely the
+generated **design base** must match it. Profiles are versioned in one place
+(`lib/template_policy.py`): `0` strict; `1-20` small differences tolerated; `21-40`
+moderate; `41-100` broad. Whatever the value, artwork that is plainly *added* - for
+example a vertical border down the middle-right that the concept does not have - is a
+major finding. The resolved value is stored with the job when it is accepted and the same
+tolerance is used when the design base is generated, reviewed and repaired. It is returned
+as `result.templateFlexibility` / `result.templateTolerance`. Values outside 0-100 are
+rejected; omitting it means 20. It passes through the Bedrock agent inside `requestJson`.
+
+### Draft and final results
+
+Poll `getLayeredDesignStatus` as before. Once the first HTML has been stored **and
+rendered**, a running (or failed) job's response also carries `draft` and `milestones`:
+
+- `draft`: `{state: "draft", candidateId, attempt, renderedAt, timeToFirstHtmlMs,
+  reviewState, final: false, publishReady: false, needsReview: true, html, htmlUrl,
+  previewUrl, linkExpiresInSeconds}`. It is **not** the result and must not be published;
+  `reviewState` is `pending-review`, `under-review`, `reviewed-approved`,
+  `reviewed-repair-pending` or `reviewed-findings-open`. `htmlUrl` and `previewUrl` are
+  signed links made at poll time that expire in at most 15 minutes; ask again for a fresh
+  one. They are never stored. The Bedrock compact status omits the HTML and links.
+- `milestones`: `firstHtmlRenderedAt`, `timeToFirstHtmlMs`, `firstCandidateId`. Written once
+  (a conditional write, so a later candidate never replaces it) and re-created from the
+  stored artifacts, flagged `firstHtmlRecovered: true`, if the write was interrupted.
+
+The final `result` adds, for jobs accepted by the current pipeline (`pipelineVersion:
+"layered-v2"`): `timing` (`finalHtmlRenderedAt` - when the *delivered* candidate was
+rendered, `timeToFinalHtmlMs`, `completedAt`, `totalDurationMs`; null when nothing was
+rendered), `qualityScore`, `qualityBreakdown`, `rubricVersion`, `qualityReason`,
+`criticalFindings`, `layerContract`, `fallbacksUsed`, `templateFlexibility`. Jobs from
+before this version keep their old shape; nothing is migrated.
+
+`qualityScore` is **provisional**: a weighted summary of the review's findings in five
+dimensions (content 30, readability/typography 25, layout/composition 20, editability 15,
+concept adherence 10), with provisional penalties and bands (`good` 85+, `acceptable`
+70+). It has not been calibrated against human ratings. Use it to compare candidates of
+one job, not as a publish threshold. It never chooses the delivered candidate and never
+makes one publishable: a critical finding (missing mandatory text, a blocking readability
+finding, a layer-contract violation) forces `publishReady: false`. When something that
+applies could not be measured the score is `null` and `qualityReason` says what.
+
+A design base that could not be used (undecodable, no alpha, hiding the photograph) is
+replaced by plain fills and gradients drawn in CSS, with no extra model call and no
+substitute artwork. The job is delivered as `SUCCEEDED_WITH_WARNINGS`, `fallbacksUsed`
+names what was substituted and what was omitted, and the design needs review.
 
 ### `reviewStrictness`
 
