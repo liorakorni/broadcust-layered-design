@@ -4,11 +4,44 @@ Turns a marketing brief and an inspiration image into a **layered, editable
 design**: the photograph, the decorative artwork and every text block come back
 as separate pieces, so the result can be edited rather than regenerated.
 
-Two operations, both on the API Lambda. Designs take minutes to produce, so this
+Four operations, all on the API Lambda. Designs take minutes to produce, so this
 is an async job API — you get a `jobId` immediately and poll for the result.
 
 - `runLayeredDesign` — accept a brief, return a `jobId`
-- `getLayeredDesignStatus` — read progress, then the finished design
+- `getLayeredDesignStatus` — read progress (including a **draft** once the first
+  HTML exists), then the finished design
+- `updateLayeredDesign` — edit text, typography or layout of a finished design
+  (no image call, no render) — see [REPAIR_ROUTING.md](REPAIR_ROUTING.md) section 5
+- `exportLayeredDesign` — render the current edited design and return its HTML and preview
+
+## Quick start
+
+1. Call `runLayeredDesign` with a fresh `requestId`. Keep the `jobId` it returns.
+2. Poll `getLayeredDesignStatus` every 3–5 seconds. Show `draft.html` (or
+   `draft.previewUrl`) as soon as it appears, labelled as a draft.
+3. Stop on `SUCCEEDED`, `SUCCEEDED_WITH_WARNINGS` or `FAILED`. All three are final.
+4. On `SUCCEEDED` or `SUCCEEDED_WITH_WARNINGS`, read `result`. Publish **only** when
+   `result.publishReady` is `true`; otherwise a person must review it first.
+5. Edit with `updateLayeredDesign`, save with `exportLayeredDesign`.
+
+```python
+import json, time, boto3
+lam = boto3.client("lambda")
+fn = "broadcust-layered-design-dev-api"
+ctx = {"ownerScope": "tenant-4812"}          # from YOUR authenticated session
+
+def call(payload):
+    out = lam.invoke(FunctionName=fn, Payload=json.dumps(payload).encode())
+    return json.loads(out["Payload"].read())
+
+job = call({"operation": "runLayeredDesign", "trustedCallerContext": ctx, "request": {...}})
+while True:
+    r = call({"operation": "getLayeredDesignStatus", "trustedCallerContext": ctx,
+              "jobId": job["jobId"]})
+    if r["status"] in ("SUCCEEDED", "SUCCEEDED_WITH_WARNINGS", "FAILED"):
+        break
+    time.sleep(4)
+```
 
 > Terminology used throughout: an **asset** is one image file (the photo, the
 > overlay, an inset). A **layer** is one positioned element in the design, which
@@ -43,7 +76,8 @@ from the shape of the request.
     "referenceImageUrl": "https://res.cloudinary.com/broadcust/image/upload/inspiration.jpg",
     "brand": { "colors": ["#0B2545"], "fontFamilies": ["Heebo"] },
     "suppliedAssets": [],
-    "designFreedom": 0
+    "designFreedom": 0,
+    "templateFlexibility": 20
   }
 }
 ```
@@ -67,6 +101,8 @@ from the shape of the request.
 | `layoutDirection` | no | `"auto"` (default), `"rtl"` or `"ltr"`: where the columns sit. See below. |
 | `textDirection` | no | `"auto"` (default), `"rtl"` or `"ltr"`: how the writing runs. |
 | `referenceLayoutPolicy` | no | `"adapt-to-locale"` (default) or `"preserve"`: whether the reference's own composition direction is kept. |
+| `designFlow` | no | `"legacy"` (default) or `"layout-first"` (where enabled). See below. |
+| `reuseConceptFromJobId` | no | Rebuild from the approved concept of an earlier job of the **same owner** instead of generating one. For re-running reconstruction after a pipeline fix. Not available through the Bedrock agent. |
 | `requestId` | **yes** | Your idempotency key. See below. |
 
 **`trustedCallerContext.ownerScope`** establishes who owns the job. It must come
@@ -271,8 +307,45 @@ While running, you get the real stage rather than an invented percentage:
 }
 ```
 
-`status` is one of `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`. Poll every few
-seconds; a typical job runs several minutes, bounded at 30.
+`status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `QUEUED` | Accepted, not started. |
+| `RUNNING` | In progress; `stage` says where. |
+| `SUCCEEDED` | Finished and passed review. `publishReady: true`. |
+| `SUCCEEDED_WITH_WARNINGS` | Finished with usable, editable HTML, but something is unresolved: findings remain, a repair budget was used up, a repair made no progress, the generated design base had to be replaced by a CSS fallback, or processing ended early. `publishReady: false`, `needsReview: true`. |
+| `FAILED` | No usable candidate exists. `error` says why. |
+
+Poll every few seconds; a typical job runs several minutes, bounded at 30. A client
+that stops only on `SUCCEEDED` will poll forever on a job delivered with warnings:
+stop on all three final statuses.
+
+`stage` is one of `PREFLIGHT`, `PREPARE_COPY`, `ANALYZE_REFERENCE`, `CONCEPT`,
+`REVIEW_CONCEPT`, `EXTRACT_SCENE`, `DECORATION_OVERLAY` (the design base),
+`CLEAN_PHOTO` (the background photograph), `INDEPENDENT_ASSETS`, `VALIDATE_ASSETS`,
+`ASSEMBLE`, `RENDER`, `REVIEW`, `FINALIZE`. The layout-first flow uses `PLAN_LAYOUT`
+and `GENERATE_PHOTO`; a reused concept uses `REUSE_CONCEPT`. Repairs loop back through
+the later stages, so `stage` can go backwards.
+
+**While running, after the first render** the same response also carries the draft
+(full description under "Draft and final results" above):
+
+```json
+{
+  "success": true, "jobId": "9f2c1a7b…", "status": "RUNNING", "stage": "REVIEW",
+  "milestones": { "firstHtmlRenderedAt": "2026-10-29T07:12:40+00:00",
+                  "timeToFirstHtmlMs": 214000, "firstCandidateId": "attempt-1",
+                  "firstHtmlRecovered": false },
+  "draft": { "state": "draft", "candidateId": "attempt-1", "reviewState": "under-review",
+             "final": false, "publishReady": false, "needsReview": true,
+             "html": "<div class=\"image container\" …", "htmlUrl": "https://…",
+             "previewUrl": "https://…", "linkExpiresInSeconds": 900 }
+}
+```
+
+The draft may be repaired or replaced before the job ends: never publish it, and expect
+the final HTML to differ.
 
 Note that `success` describes the *lookup*, not the design. A failed job is a
 successful lookup: `success: true` with `status: "FAILED"`.
@@ -327,6 +400,33 @@ successful lookup: `success: true` with `status: "FAILED"`.
   }
 }
 ```
+
+### Success, warnings and `publishReady`
+
+A finished job returns `result` for both `SUCCEEDED` and `SUCCEEDED_WITH_WARNINGS`;
+the response also carries a small `outcome` object (`qualityPassed`, `needsReview`,
+`publishReady`, `stopReason`, `selectedAttempt`) so a poller can decide without
+opening the large result.
+
+| `result` field | Meaning |
+|---|---|
+| `publishReady` | Safe to publish without review. The only field to gate publication on. |
+| `needsReview` | A person should look first. |
+| `qualityPassed` | Review passed with no blocking finding. |
+| `stopReason` | `APPROVED`, `REPAIR_NO_PROGRESS`, `CORRECTION_EXHAUSTED`, `REPAIR_ROUTE_UNRESOLVED`, or the error code of a later step that failed after a usable candidate existed. |
+| `warnings[]` | `{code, severity, affectedElementIds, message, suggestedAction}` for the delivered candidate only. |
+| `selectedAttempt`, `designSelection` | Which candidate was delivered and why it beat the others. The best candidate is delivered, not the last one. |
+| `diagnostics` | For a job delivered after an early stop: the original reason and the candidates considered. |
+| `metrics` | Cost and time: per-stage durations, `imageGenerationCalls`, `renderCalls`, repair routes, cache hits. |
+| `pipelineVersion`, `templateFlexibility`, `templateTolerance` | What produced it and the tolerance used (layered-v2 jobs). |
+| `timing`, `milestones` | When the first and final HTML were rendered and how long the job took (layered-v2). |
+| `qualityScore`, `qualityBreakdown`, `rubricVersion`, `qualityReason`, `criticalFindings` | The provisional score (see above). `qualityScore` may be `null`. |
+| `layerContract`, `fallbacksUsed` | Whether each layer has one owner, and anything substituted (layered-v2). |
+
+`publishReady` is `false` whenever approved text is missing, a blocking finding
+remains, the layer contract is violated, or a CSS fallback replaced the design base.
+A design with missing mandatory content is **never** reported as passing, and is
+delivered only so it can be fixed by hand.
 
 ### What each part is for
 
@@ -444,6 +544,37 @@ not.
 
 ---
 
+## Editing a finished design
+
+Only for `SUCCEEDED` and `SUCCEEDED_WITH_WARNINGS` jobs. Edits patch the design; they
+never regenerate images (`imageGenerationCalls: 0`) and never render.
+
+```json
+{ "operation": "updateLayeredDesign",
+  "trustedCallerContext": { "ownerScope": "tenant-4812" },
+  "request": { "jobId": "9f2c1a7b…", "requestId": "edit-42", "expectedVersion": 3,
+    "changes": { "content":    { "title.primary": "New headline" },
+                 "typography": { "t_title": { "strokeColor": "#FFFFFF", "strokeWidth": "3" } },
+                 "layout":     { "t_phone": { "y": "900" } } } } }
+```
+
+- `expectedVersion` is the `designVersion` you last saw; a stale one is
+  `STALE_DESIGN_VERSION` with `details.currentVersion` — reload, re-apply, resend with
+  a **new** `requestId`.
+- An identical retry (same `requestId`, same payload) is safe; the same `requestId`
+  with different content is `IDEMPOTENCY_CONFLICT`.
+- Unknown keys, empty text and out-of-range values are `INVALID_EDIT`.
+- Debounce typing (about 800 ms) and send one update per burst.
+- `{"operation": "exportLayeredDesign", "request": {"jobId": "…", "expectedVersion": 4}}`
+  is the only call that assembles and renders: it returns `html`, `htmlHash`,
+  `previewUrl` and renderer `problems`, reuses published asset URLs and calls no image
+  model. Call it on an explicit Save/Export, not while typing.
+
+Full contract: [REPAIR_ROUTING.md](REPAIR_ROUTING.md) section 5. These two operations
+are **direct calls only**; they are not in the Bedrock action group.
+
+---
+
 ## 4. Failures
 
 A failed job names the stage that failed and why:
@@ -480,7 +611,12 @@ timeout is retryable; an unapproved font is not.
 | `CAPABILITY_MISSING` | The deployment is misconfigured — all problems listed at once. | Operator fix, not a caller fix. |
 | `COPY_INVALID` | The copy manifest invented a fact or dropped a `requiredText`. | Usually transient; retry. |
 | `INVALID_SCENE` | Layout geometry was out of bounds, or copy was altered. | Retryable. |
-| `INVALID_TRANSPARENCY` | The overlay came back opaque or with the photo baked in. | Repaired automatically up to twice, then terminal. |
+| `INVALID_TRANSPARENCY` | (Older jobs, `layered-v1`.) The overlay came back opaque or with the photo baked in. | Repaired automatically up to twice, then terminal. For current jobs an unusable design base is not a failure: it becomes a CSS fallback and `SUCCEEDED_WITH_WARNINGS`. |
+| `MANDATORY_CONTENT_MISSING` | No candidate carries all approved text, so none can be delivered. | Check the copy; retry. |
+| `REVIEW_BLOCKED` | No candidate was approved and none could be delivered as a usable best effort. | Adjust the brief or reference; resubmit. |
+| `RENDER_FAILED`, `ASSEMBLY_FAILED`, `FONT_MISSING` | A technical step failed. If an earlier candidate was intact the job is delivered with warnings instead. | Retry if `retryable`. |
+| `FINAL_HASH_MISMATCH` | The stored document or preview is not what was reviewed. Nothing is delivered. | Resubmit. |
+| `STALE_DESIGN_VERSION`, `DESIGN_NOT_EDITABLE`, `INVALID_EDIT` | Edit-call errors: stale version, job not finished, invalid change. | See "Editing a finished design". |
 | `IMPOSSIBLE_CONTENT_REQUIREMENT` | The design needs more than 3 generated images. | Simplify the brief or supply the images. |
 | `REQUIRED_COPY_MISSING` | No concept candidate carried all of the approved text (for example the business name) after 2 concept correction rounds. Category `content`. | Check the copy; retry. The message names what is missing. |
 | `POLICY_VERSION_MISMATCH` | A stored policy or reference analysis was produced under another policy version. | Submit the request again. |
@@ -514,8 +650,19 @@ number is not reordered.
 **Verified before delivery.** Every design is rendered in a real browser and
 checked — at full size and at 360px feed width — for overflowing text, missing
 fonts, images that failed to load, and layers escaping the canvas. Up to two
-correction rounds run automatically. A design with blocking defects fails rather
-than being delivered.
+correction rounds run automatically. A design with blocking defects is never
+reported as passing: it is delivered as `SUCCEEDED_WITH_WARNINGS` (when usable HTML
+exists) with `publishReady: false` and the unresolved findings listed, or the job
+fails if there is nothing usable.
+
+**One owner per layer.** The photograph, the structural design base, editable text,
+text backgrounds (CTA, contact circles) and icons are separate layers, and nothing is
+drawn twice. A violation is reported in `layerContract` and forces review.
+
+**Light repairs cost no image.** Wording, outline, position, colour and gradient
+fixes patch the design in code. Image generation is spent only on a design-base repair
+(at most once, after the first HTML) and, with an explicit documented grant, a photograph
+repair.
 
 ---
 
@@ -527,8 +674,12 @@ than being delivered.
 | Brief | 12,000 characters |
 | Supplied assets | 10 |
 | Generated inset images | 3 per design |
-| Correction rounds | 2 |
-| Overlay repairs | 2 |
+| Concept correction rounds | 2 |
+| Design-base (template) image repairs | 1, after the first HTML |
+| DOM/CSS repair rounds (content, typography, layout) | 2 in total |
+| Photograph image repairs | 0 unless explicitly granted (cap 1) |
+| Typical image calls (current pipeline) | 3: concept, design base, background photograph |
+| Draft links | expire after 15 minutes; poll again for a fresh one |
 | Job duration | 30 minutes |
 | Retention | A **saved** (SUCCEEDED) design is kept. Working artifacts and failed jobs expire after 30 days |
 
@@ -553,7 +704,7 @@ never auto-deleted; the job records of those older jobs still expire at 30 days.
 
 ## Invoking it
 
-Both operations are on the same Lambda, invoked directly:
+All operations are on the same Lambda, invoked directly:
 
 ```bash
 aws lambda invoke \
@@ -588,11 +739,14 @@ agent event by `messageVersion`, `actionGroup` and `function`, and answers in th
 agent response envelope. Direct calls keep the bare format above; both paths run
 the same validation, authorization and service code.
 
-The two functions are defined in [`bedrock/action-group.json`](../bedrock/action-group.json):
+The agent can start a job and read its status. It cannot edit or export (use the direct
+`updateLayeredDesign` / `exportLayeredDesign`) and cannot pass `reuseConceptFromJobId`.
+When the agent reads a status, treat `SUCCEEDED_WITH_WARNINGS` as final too. The two
+functions are defined in [`bedrock/action-group.json`](../bedrock/action-group.json):
 
 | Function | Parameter | Returns |
 |---|---|---|
-| `runLayeredDesign` | `requestJson` (string) | `{success, accepted, jobId, status: "QUEUED"}` |
+| `runLayeredDesign` | `requestJson` (string; may include `designFreedom` and `templateFlexibility`) | `{success, accepted, jobId, status: "QUEUED"}` |
 | `getLayeredDesignStatus` | `jobId` (string) | Status and stage, or a compact result |
 
 Starting a job confirms acceptance only. Do not wait for the design inside the
@@ -617,7 +771,13 @@ agent turn; the backend keeps the `jobId` and reads the terminal status itself.
 }
 ```
 
-Fields that are unavailable are omitted. There is no full HTML, layer map, asset
+Fields that are unavailable are omitted, except `qualityScore` and `qualityReason`,
+which are kept even when null (no score, and why). The compact result also carries
+`publishReady`, `needsReview`, `qualityPassed`, `stopReason`, `selectedAttempt`,
+`pipelineVersion`, `templateFlexibility`, `fallbacksUsed`, `milestones` and `timing`
+when present. While a job runs, `draft` is reduced to its state (`candidateId`,
+`reviewState`, `renderedAt`, `final: false`, `publishReady: false`, `htmlHash`); its
+HTML and links are left out. There is no full HTML, layer map, asset
 list or QA detail in an agent response. The backend gets the complete result —
 HTML, `layerMap`, `assets`, `qa` — by calling `getLayeredDesignStatus` **directly**
 on the Lambda. That is why the backend never needs read access to the bucket.
