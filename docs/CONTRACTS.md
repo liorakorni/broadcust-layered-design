@@ -17,7 +17,7 @@ Step Functions invokes `handler_stage.py` with exactly this, and nothing larger:
 `assetId` is non-null only inside the `INDEPENDENT_ASSETS` Map. Image bytes, HTML and
 scene documents never travel through workflow state — only pointers.
 
-## 2. Stage return
+## 2. Stage return shape
 
 ```json
 {
